@@ -1,0 +1,30 @@
+# dotarchitecture configuration file
+project:
+  name: "unnamed-project"
+  targetStack: "typescript/nestjs"
+
+context:
+  teamSize: 5
+  teamMaturity: "intermediate" # junior, intermediate, advanced
+  domainComplexity: "medium"   # low, medium, high
+  scale: "low"                 # low, medium, high
+  availability: "low"          # low, medium, high
+  auditability: false
+
+overrides:
+  # Force specific outputs if desired
+  # architecture: "modular-monolith"
+  # pattern: "hexagonal"
+
+rules:
+  # Override default evaluation thresholds
+  minTeamSizeForMicroservices: 15
+  minScaleForEventDriven: "high"
+  maxMaturityForActiveRecord: "junior"
+
+templatesDir: "./custom-templates"
+
+hooks:
+  onArchitectureChange: "echo 'Architecture changed!'"
+  onNewModuleDesigned: "echo 'New module designed!'"
+  plugins: []

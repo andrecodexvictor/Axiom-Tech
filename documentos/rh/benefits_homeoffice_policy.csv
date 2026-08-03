@@ -1,0 +1,7 @@
+Benefit_ID,Benefit_Name,Category,Description,Monthly_Allowance_BRL,Eligibility
+BEN-001,Meal Voucher (VR),Nutritional,Daily meal allowance for workdays,1200.00,All full-time employees
+BEN-002,Food Voucher (VA),Nutritional,Supermarket card allowance,600.00,All full-time employees
+BEN-003,Home Office Stpend,Remote Work,Internet and electricity subsidy,350.00,Remote and Hybrid staff
+BEN-004,Health & Dental Insurance,Healthcare,Bradesco Saúde Top National coverage,0.00 (Fully Paid),Employees and direct dependents
+BEN-005,Gympass / Wellhub,Wellness,Access to gyms and wellness apps,150.00,All employees
+BEN-006,Education & Conference Budget,Professional Growth,Annual budget for courses and certifications,5000.00,After 90 days of employment

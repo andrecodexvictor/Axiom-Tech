@@ -1,0 +1,30 @@
+# DotContext Specification: Axiom Tech Context & Domain Memory
+
+## 1. Company Profile: Axiom Tech
+Axiom Tech is a fictional high-growth technology enterprise specializing in digital platforms, enterprise automation services, and AI solutions for internal teams and corporate clients.
+
+## 2. Business Goal
+To eliminate operational query friction, accelerate employee onboarding, and provide instant, accurate answers regarding internal policies, incident procedures, microservice architectures, legal terms, and compliance guidelines.
+
+## 3. Supported Organizational Domains (V1 Focus)
+
+1. **Engineering & Operations**:
+   - Back-end Engineering Standards (Python/Go, REST APIs, PostgreSQL, Redis, Observability).
+   - Front-end Engineering Guidelines (React, Next.js, Design System, Accessibility).
+   - Microservices Architecture & Domain Mapping.
+   - Incident Response Manual (SEV-1, SEV-2, SEV-3 classification, escalation matrix, post-mortems).
+
+2. **Legal & Compliance**:
+   - Internal Terms of Use (acceptable use, access control, data security).
+   - LGPD & Privacy Policy (data handling, data subject rights, compliance checklists).
+
+3. **HR & Internal Communication**:
+   - Benefits & Home Office Policy (reimbursements, hybrid work rules, equipment).
+   - Employee Onboarding Guide (first-week checklist, access provisioning).
+   - Internal Communication Guidelines (Slack channels, reporting cadence).
+
+## 4. Persona & Tone Guidelines
+- **User Persona**: Any Axiom Tech employee (Developers, HR Managers, Operations Leads, Legal Counsel).
+- **Agent Persona**: Axiom Tech Corporate Knowledge Assistant.
+- **Tone**: Professional, clear, concise, direct, and helpful.
+- **Response Format**: Summarized answer upfront, bullet points for steps/policies, and explicit source references.

@@ -1,0 +1,27 @@
+# Python bytecode & cache
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+
+# Virtual Environments
+venv/
+env/
+.venv/
+
+# Environment Variables & Secrets
+.env
+.env.local
+
+# Node modules & logs
+node_modules/
+npm-debug.log*
+
+# Scratch & temporary artifacts
+scratch/
+.system_generated/
+*.log
+
+# OS generated files
+.DS_Store
+Thumbs.db

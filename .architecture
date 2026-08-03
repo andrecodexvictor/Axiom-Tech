@@ -1,0 +1,52 @@
+# DotArchitecture Specification: Axiom Tech Corporate AI Agent (V1)
+
+## 1. System Overview
+The Axiom Tech Corporate AI Agent is an enterprise Agentic RAG system powered by LangGraph, NVIDIA LLMs, and Pinecone Vector Database. It acts as a centralized conversational knowledge engine across internal enterprise domains.
+
+## 2. Multi-Agent Architecture (LangGraph Topology)
+
+```mermaid
+graph TD
+    User([User Query]) --> Supervisor[Supervisor Agent]
+    
+    Supervisor -->|Internal Policy/RH/General| DocAgent[Documentation RAG Agent]
+    Supervisor -->|Engineering/Incidents/Architecture| EngAgent[Engineering Agent]
+    Supervisor -->|LGPD/Privacy/Internal Terms| LegalAgent[Legal & Compliance Agent]
+    Supervisor -->|Repo Docs/Code Structure| RepoAgent[Repo Agent]
+    Supervisor -->|External Library/Doc Search| WebAgent[Web Research Agent]
+
+    DocAgent --> Grader{Grade & Grounding Check}
+    EngAgent --> Grader
+    LegalAgent --> Grader
+    RepoAgent --> Grader
+    WebAgent --> Grader
+
+    Grader -->|Relevant & Grounded| Synthesizer[Response Synthesizer with Citations]
+    Grader -->|Low Relevance / Missing Info| Rewrite[Query Rewrite Node]
+    
+    Rewrite --> Supervisor
+    Synthesizer --> User
+```
+
+## 3. Agent Responsibilities
+
+| Agent Name | Scope & Responsibilities | Data Sources / Tools |
+| :--- | :--- | :--- |
+| **Supervisor Agent** | Classifies domain intent, routes queries, manages iteration state. | Intent Classifier Prompt + LangGraph Router |
+| **Documentation Agent** | Responds to HR policies, onboarding, home office, internal comms. | Pinecone RAG (`rh`, `comms`) |
+| **Engineering Agent** | Handles technical architecture, microservices map, SEV-1/2 incident guides. | Pinecone RAG (`engineering`, `ops`) |
+| **Legal & Compliance Agent** | Answers LGPD privacy policy, internal terms of use, NDAs. | Pinecone RAG (`juridico`, `compliance`) |
+| **Repo Agent** | Consults internal GitHub/GitLab repository structures and READMEs. | Internal Repo Parser Tool |
+| **Web Research Agent** | Performs controlled external technical research (plan -> fetch -> evaluate -> synthesize). | Serper / Web Scraping Tool |
+
+## 4. Ingestion & RAG Pipeline Architecture
+- **Supported Formats**: PDF, Word (DOCX), PowerPoint (PPTX), Excel (XLSX), Markdown (MD), CSV, JSON, HTML.
+- **Normalization**: Extract raw text -> clean metadata -> Unified Document Schema.
+- **Chunking**: Recursive character text splitter (Chunk Size: 1000, Overlap: 200).
+- **Embedding & Storage**: Pinecone Vector Index with metadata filters (`domain`, `source_file`, `author`, `updated_at`).
+
+## 5. Anti-Hallucination Guardrails
+1. **Grounded RAG**: All corporate answers MUST strictly cite retrieved internal document passages.
+2. **Grade Documents Node**: Assesses relevance score of retrieved passages prior to answer generation.
+3. **Query Rewrite Loop**: Maximum 2 retry loops if retrieved context fails relevance criteria.
+4. **Citation Engine**: Mandatory source attribution format: `[Source: document_name.pdf | Section/Page X]`.

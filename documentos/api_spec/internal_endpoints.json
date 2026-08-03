@@ -1,0 +1,36 @@
+{
+  "api_name": "Axiom Tech Internal Core API",
+  "version": "1.4.0",
+  "base_url": "https://api.internal.axiomtech.com/v1",
+  "endpoints": [
+    {
+      "path": "/health",
+      "method": "GET",
+      "description": "System health check returning service statuses and database latency.",
+      "authentication": false
+    },
+    {
+      "path": "/incidents",
+      "method": "POST",
+      "description": "Report a new operational incident (SEV-1 to SEV-3). Triggers PagerDuty notification.",
+      "authentication": true,
+      "payload": {
+        "title": "string",
+        "severity": "SEV-1 | SEV-2 | SEV-3",
+        "service": "string",
+        "description": "string"
+      }
+    },
+    {
+      "path": "/documents/search",
+      "method": "POST",
+      "description": "Perform semantic Pinecone search across enterprise document embeddings.",
+      "authentication": true,
+      "payload": {
+        "query": "string",
+        "domain_filter": "string",
+        "top_k": 5
+      }
+    }
+  ]
+}

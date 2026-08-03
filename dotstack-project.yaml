@@ -1,0 +1,22 @@
+# dotstack-project.yaml
+# Configuration file for recommending your technology stack.
+
+product:
+  name: "My App"
+  type: "SaaS" # Options: SaaS, API, MobileApp, CLI, InternalTool, WebApp
+
+team:
+  devs: 3 # Number of developers on the project
+  experience: "intermediate" # Options: junior, intermediate, senior
+
+requirements:
+  scale: "medium" # Options: low, medium, high
+  latency: "normal" # Options: normal, low-latency
+  availability: "normal" # Options: normal, high-availability
+
+# Optional constraints to force specific choices (overrides rules engine scores)
+constraints:
+  # language: "TypeScript" # Options: TypeScript, Python, Go, Java
+  # database: "PostgreSQL" # Options: PostgreSQL, MongoDB, SQLite, Redis
+  # cloud: "Render" # Options: AWS, Vercel, Render, Docker
+  # budget: 50 # Max monthly budget in USD
