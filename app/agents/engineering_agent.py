@@ -1,10 +1,10 @@
 from app.agents.state import AgentState
 from app.vectorstore.pinecone_client import vector_store
+from app.llm_client import nvidia_client
 
 class EngineeringAgent:
     """
-    Engineering & Incident Specialist Agent focusing on microservices architecture,
-    backend/frontend guidelines, and SEV-1/2 incident response procedures.
+    Engineering & Incident Agent powered by MiniMax M3 (minimaxai/minimax-m3).
     """
 
     @staticmethod
@@ -17,7 +17,8 @@ class EngineeringAgent:
 
         if results:
             context_str = "\n\n".join([f"Source ({doc['metadata']['source']}):\n{doc['content']}" for doc in results])
-            state["final_answer"] = f"Based on Engineering & Incident Documentation:\n\n{context_str}"
+            prompt = f"Using MiniMax M3, answer the engineering/incident query strictly based on context:\n\nContext:\n{context_str}\n\nQuestion: {q}"
+            state["final_answer"] = nvidia_client.invoke_minimax(prompt)
         else:
             state["final_answer"] = "No direct engineering guidelines found matching your query."
 
