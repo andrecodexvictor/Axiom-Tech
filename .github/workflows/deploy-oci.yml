@@ -78,11 +78,11 @@ jobs:
           sudo -n env AXIOM_CORS_ORIGINS="$PUBLIC_URL" docker compose -f docker-compose.yml -f docker-compose.oci.yml -f docker-compose.gateway.yml up -d --build --remove-orphans
           sudo -n env AXIOM_CORS_ORIGINS="$PUBLIC_URL" docker compose -f docker-compose.yml -f docker-compose.oci.yml -f docker-compose.gateway.yml exec -T api python -m app.main --ingest
 
-          curl --fail --silent --show-error --retry 10 --retry-delay 3 http://127.0.0.1:8080/api/v1/health
+          curl --fail --silent --show-error --connect-timeout 5 --max-time 30 --retry 10 --retry-delay 3 http://127.0.0.1:8080/api/v1/health
           REMOTE
 
       - name: Verify public URL
         shell: bash
         run: |
           set -eu
-          curl --fail --silent --show-error --retry 10 --retry-delay 5 "$PUBLIC_URL/api/v1/health"
+          curl --fail --silent --show-error --connect-timeout 10 --max-time 30 --retry 3 --retry-delay 5 "$PUBLIC_URL/api/v1/health"
