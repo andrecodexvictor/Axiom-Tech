@@ -12,7 +12,7 @@ rejectedArchitectures:
   - architecture: serverless
     reason: Estruturas serverless criam alto acoplamento com provedores de nuvem e
       gargalos de cold start que não alinham com o perfil.
-recommendedInternalPattern: layered
+recommendedInternalPattern: layered-with-ports-at-integration-seams
 recommendedDevStyle:
   - BDD (Behavior-Driven Development) ou alta cobertura de testes
     unitários/integração
@@ -36,16 +36,17 @@ customRationale: "Com base no contexto do projeto, avaliamos um time de **5
   complexidade **medium**. Com um time médio de 5 devs, sugerimos a abordagem
   **modular-monolith** para facilitar a cooperação em paralelo sem a
   complexidade de rede e orquestração de múltiplos microsserviços. O domínio de
-  complexidade média sugere o padrão **layered**, oferecendo um bom equilíbrio
+  complexidade média sugere o padrão
+  **layered-with-ports-at-integration-seams**, oferecendo um bom equilíbrio
   entre separação de responsabilidades e agilidade de desenvolvimento. "
 recommendedFolderScaffold:
-  - path: src/presentation
-    purpose: Controladores e componentes de visualização encarregados da interação
-      com o cliente.
-  - path: src/application
-    purpose: Serviços de aplicação coordenando ações e fluxos de dados.
-  - path: src/domain
-    purpose: Entidades e lógica de domínio do projeto.
-  - path: src/infrastructure
-    purpose: Acesso ao banco de dados, repositórios concretos e utilitários técnicos.
-tailoredDesignPatterns: []
+  - path: src/controllers
+    purpose: Controladores que recebem requisições e atualizam os modelos.
+  - path: src/models
+    purpose: Classes de dados e lógica de ORM direta.
+  - path: src/views
+    purpose: Templates HTML ou serializadores e views JSON de retorno.
+tailoredDesignPatterns:
+  - name: Event Sourcing / Ledger Pattern
+    description: Salvar alterações no estado das entidades como uma sequência
+      imutável de eventos de domínio.

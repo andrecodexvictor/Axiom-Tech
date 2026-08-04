@@ -1,22 +1,32 @@
-# dotstack-project.yaml
-# Configuration file for recommending your technology stack.
-
+# DotStack project input: Axiom Tech V3
 product:
-  name: "My App"
-  type: "SaaS" # Options: SaaS, API, MobileApp, CLI, InternalTool, WebApp
+  name: "Axiom Tech Corporate Knowledge Assistant"
+  type: "InternalTool"
 
 team:
-  devs: 3 # Number of developers on the project
-  experience: "intermediate" # Options: junior, intermediate, senior
+  devs: 5
+  experience: "intermediate"
 
 requirements:
-  scale: "medium" # Options: low, medium, high
-  latency: "normal" # Options: normal, low-latency
-  availability: "normal" # Options: normal, high-availability
+  scale: "medium"
+  latency: "normal"
+  availability: "normal"
+  auditability: true
+  offlineDevelopment: true
 
-# Optional constraints to force specific choices (overrides rules engine scores)
 constraints:
-  # language: "TypeScript" # Options: TypeScript, Python, Go, Java
-  # database: "PostgreSQL" # Options: PostgreSQL, MongoDB, SQLite, Redis
-  # cloud: "Render" # Options: AWS, Vercel, Render, Docker
-  # budget: 50 # Max monthly budget in USD
+  language: "Python"
+  cloud: "Docker"
+  apiFramework: "FastAPI"
+  frontend: "React/Vite"
+  vectorStoreDefault: "ChromaDB"
+  vectorStoreOptional: "Pinecone"
+  llmProviderOptional: "NVIDIA NIM"
+  deploymentTarget: "OCI"
+
+delivery:
+  architecture: "modular-monolith"
+  apiContract: "/api/v1"
+  persistentData: "ChromaDB volume"
+  secretsPolicy: "runtime-only; never commit"
+  localMode: "deterministic offline defaults"

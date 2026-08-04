@@ -1,30 +1,32 @@
-# dotarchitecture configuration file
+# DotArchitecture input: Axiom Tech V3
 project:
-  name: "unnamed-project"
-  targetStack: "typescript/nestjs"
+  name: "axiom-tech-corporate-knowledge-assistant"
+  targetStack: "python/fastapi"
+  version: "v3"
 
 context:
   teamSize: 5
-  teamMaturity: "intermediate" # junior, intermediate, advanced
-  domainComplexity: "medium"   # low, medium, high
-  scale: "low"                 # low, medium, high
-  availability: "low"          # low, medium, high
-  auditability: false
+  teamMaturity: "intermediate"
+  domainComplexity: "medium"
+  scale: "medium"
+  availability: "medium"
+  auditability: true
 
 overrides:
-  # Force specific outputs if desired
-  # architecture: "modular-monolith"
-  # pattern: "hexagonal"
+  architecture: "modular-monolith"
+  pattern: "layered-with-ports-at-integration-seams"
 
 rules:
-  # Override default evaluation thresholds
   minTeamSizeForMicroservices: 15
   minScaleForEventDriven: "high"
   maxMaturityForActiveRecord: "junior"
+  requireVersionedApiBoundary: true
+  requireGroundedCitations: true
+  requireOfflineDeterministicMode: true
 
 templatesDir: "./custom-templates"
 
 hooks:
-  onArchitectureChange: "echo 'Architecture changed!'"
-  onNewModuleDesigned: "echo 'New module designed!'"
+  onArchitectureChange: "echo 'Architecture changed'"
+  onNewModuleDesigned: "echo 'New module designed'"
   plugins: []

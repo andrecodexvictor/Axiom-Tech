@@ -1,6 +1,6 @@
 # Proposed Folder Structure
 
-This project is configured to use the **layered** architectural pattern. Agents and developers should organize newly created modules according to the layout below:
+This project is configured to use the **layered-with-ports-at-integration-seams** architectural pattern. Agents and developers should organize newly created modules according to the layout below:
 
 ```text
 src/

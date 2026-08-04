@@ -1,66 +1,35 @@
-import os
-import math
-from typing import List, Dict, Any
+"""Legacy import compatibility for the former ``vector_store`` singleton.
+
+New application code uses ``create_vector_store`` and injects the port.  This
+wrapper retains the old methods for command-line/import callers while avoiding the
+previous fake Pinecone success message.
+"""
+
+from __future__ import annotations
+
+from typing import Any, Dict, List, Optional
+
 from app.config import settings
+from app.vectorstore.factory import create_vector_store
+
 
 class VectorStore:
-    """
-    Pinecone Vector Database connector with robust fallback to lightweight local TF-IDF vector index.
-    """
-
-    def __init__(self):
-        self.use_pinecone = bool(settings.PINECONE_API_KEY)
-        self.documents: List[Dict[str, Any]] = []
-
-        if self.use_pinecone:
-            try:
-                from pinecone import Pinecone
-                self.pc = Pinecone(api_key=settings.PINECONE_API_KEY)
-                print("[Pinecone] Connected to Pinecone Vector DB.")
-            except Exception as e:
-                print(f"[Pinecone Warning] Falling back to local index: {e}")
-                self.use_pinecone = False
-        else:
-            print("[VectorStore] Pinecone API key not found. Operating in fast local vector mode.")
+    def __init__(self) -> None:
+        self._delegate = create_vector_store(settings)
 
     def index_documents(self, chunks: List[Dict[str, Any]]) -> int:
-        self.documents.extend(chunks)
-        if self.use_pinecone:
-            try:
-                # Stub for Pinecone upsert logic
-                print(f"[Pinecone] Upserted {len(chunks)} vectors to index '{settings.PINECONE_INDEX_NAME}'.")
-            except Exception as e:
-                print(f"[Pinecone Upsert Error]: {e}")
-        return len(chunks)
+        return self._delegate.upsert(chunks).inserted
 
-    def similarity_search(self, query: str, domain_filter: str = None, top_k: int = 4) -> List[Dict[str, Any]]:
-        if not self.documents:
-            return []
+    def similarity_search(
+        self, query: str, domain_filter: Optional[str] = None, top_k: int = 4
+    ) -> List[Dict[str, Any]]:
+        return [
+            {"id": result.id, "content": result.content, "metadata": result.metadata, "score": result.score}
+            for result in self._delegate.search(query, domain_filter, top_k)
+        ]
 
-        query_terms = set(query.lower().split())
-        scored_docs = []
+    def status(self) -> Dict[str, Any]:
+        return self._delegate.status()
 
-        for doc in self.documents:
-            meta = doc["metadata"]
-            if domain_filter and meta.get("domain") != domain_filter and domain_filter != "all":
-                continue
-
-            content_terms = doc["content"].lower().split()
-            if not content_terms:
-                continue
-
-            # Term overlap score
-            match_count = sum(1 for word in query_terms if word in content_terms)
-            score = match_count / math.sqrt(len(query_terms) * len(content_terms) + 1e-5)
-            
-            # Domain boosting
-            if domain_filter and meta.get("domain") == domain_filter:
-                score *= 1.5
-
-            if score > 0:
-                scored_docs.append((score, doc))
-
-        scored_docs.sort(key=lambda x: x[0], reverse=True)
-        return [doc for score, doc in scored_docs[:top_k]]
 
 vector_store = VectorStore()

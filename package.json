@@ -1,10 +1,12 @@
 {
   "name": "axiom-tech-workspace",
-  "version": "2.0.0",
+  "version": "3.0.0",
   "private": true,
   "scripts": {
-    "build": "pnpm --prefix frontend build",
-    "dev:frontend": "pnpm --prefix frontend dev",
-    "start:app": "streamlit run app/main.py"
+    "build": "npm --prefix frontend run build",
+    "check": "npm --prefix frontend run check",
+    "dev:frontend": "npm --prefix frontend run dev",
+    "start:api": "uvicorn app.main:app --reload --port 8000",
+    "test:backend": "python -m pytest tests/backend -q"
   }
 }

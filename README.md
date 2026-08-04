@@ -1,106 +1,110 @@
-# Axiom Tech Corporate AI Agent (V1)
+# Axiom Tech Corporate Knowledge Assistant — V3
 
-## Overview & Background (Minimundo)
-**Axiom Tech** is a technology enterprise developing digital platforms, enterprise automation services, and AI solutions. This project implements V1 of the Axiom Tech Corporate AI Agent: a centralized conversational knowledge assistant accessible to all employees.
+Axiom Tech V3 is a local-first corporate knowledge assistant for internal policies, engineering and incident guidance, legal/compliance material, and repository/API references.
 
-The agent answers natural language questions regarding internal policies, incident procedures, microservice architectures, legal terms, and compliance guidelines, backed by internal documents in multiple formats (**PDF, Word, Excel, CSV, JSON, Markdown, HTML**).
+> **Delivery status:** the repository contains the V3 architecture, contracts, and OCI-oriented delivery assets. This is not a claim that an OCI or production deployment, a public demo, or screenshots exist.
 
----
+## What V3 changes
 
-## Technical Stack & Architecture
+- A Python modular monolith with FastAPI as the public API boundary.
+- A real LangGraph StateGraph for routing, retrieval, specialist handling, evidence grading, up to two rewrites, grounded synthesis, and fallback.
+- Persistent ChromaDB as the local default; Pinecone is an explicitly configured optional adapter.
+- Deterministic local behavior without NVIDIA or Pinecone credentials; NVIDIA NIM is optional.
+- A React/Vite client that calls the versioned API and renders answer/source/trace data.
+- Structured citations that preserve source, domain, file type, chunk, safe corpus-relative path or URL, and available page/slide/sheet metadata.
+- Explicit allowlisted technical web research that is disabled by default and never acts as a hidden fallback.
 
-- **Governance Specifications**: Built using `.architecture` (DotArchitecture), `.context` (DotContext), and `.stack` (DotStack) standards.
-- **LLM Reasoning Engine**: NVIDIA NIM / API (`meta/llama-3.1-70b-instruct`).
-- **Multi-Agent Orchestration**: **LangGraph** workflow engine (Supervisor -> Specialist Agents -> Grade/Rewrite -> Synthesizer).
-- **Vector Store**: **Pinecone Vector DB** (with automatic local index fallback for offline dev).
-- **User Interface**: Interactive **Streamlit** Web Application & CLI mode.
-- **Cloud Infrastructure**: Deployable on Oracle Cloud Infrastructure (OCI Compute / GenAI Containers).
+The legacy specification is retained at `docs/legacy/v1-architecture.md`. V3 authority lives in `.context`, `.stack`, `dotarchitecture-input.yaml`, `dotarchitecture.yaml`, `docs/architecture.md`, and the V3 ADRs. Legacy Streamlit/CLI or simulated UI material should not be treated as the V3 contract during migration.
 
----
+## Architecture
 
-## Multi-Agent Architecture
+~~~text
+React/Vite client
+       |
+       v
+FastAPI /api/v1
+       |
+       v
+Application use cases -> LangGraph StateGraph
+       |                    |
+       v                    v
+Ingestion              Retrieval / model ports
+       |                    |
+Internal corpus      ChromaDB default
+                     Pinecone/NVIDIA NIM optional
+~~~
 
-```
-                       ┌─────────────────────────┐
-                       │    Supervisor Agent     │
-                       └────────────┬────────────┘
-                                    │
-           ┌────────────────────────┼────────────────────────┐
-           ▼                        ▼                        ▼
-┌─────────────────────┐  ┌─────────────────────┐  ┌─────────────────────┐
-│  Doc RAG Agent      │  │  Engineering Agent  │  │  Legal Agent        │
-│  (HR / Comms)       │  │  (Architecture/SEVs)│  │  (LGPD / Terms)     │
-└──────────┬──────────┘  └──────────┬──────────┘  └──────────┬──────────┘
-           │                        │                        │
-           └────────────────────────┼────────────────────────┘
-                                    ▼
-                       ┌─────────────────────────┐
-                       │   Grade & Rewrite Node  │
-                       └────────────┬────────────┘
-                                    ▼
-                       ┌─────────────────────────┐
-                       │  Synthesizer with Source│
-                       │       Citations         │
-                       └─────────────────────────┘
-```
+Corporate answers are evidence-backed or explicitly limited. External research is an explicit route; it is not a hidden fallback for missing internal evidence.
 
----
+To enable the explicit `web` domain, set `AXIOM_WEB_ENABLED=true`, provide `SERPER_API_KEY`, and configure `AXIOM_WEB_ALLOWLIST` with trusted technical documentation hosts. Candidate and redirect URLs remain HTTPS-only and must match that allowlist.
 
-## Folder Structure
+Read the detailed architecture in docs/architecture.md, the HTTP contract in docs/api.md, and product/interface intent in PRODUCT.md and DESIGN.md.
 
-```
-Axiom Tech/
-├── .architecture               # DotArchitecture specification
-├── .context                    # DotContext domain memory specification
-├── .stack                      # DotStack technical stack specification
-├── .agents/rules/              # Antigravity custom governance rules
-├── .env.example                # Template for API keys (NVIDIA, Pinecone)
-├── README.md                   # Complete documentation
-├── requirements.txt            # Python dependencies
-├── documentos/                 # Synthetic corporate documents
-│   ├── engenharia/             # Guidelines, Microservices map, SEV Incident manual
-│   ├── juridico/               # Privacy policy (LGPD), Internal Terms of Use
-│   ├── rh/                     # Benefits CSV, Onboarding guide, Internal Comms
-│   └── api_spec/               # Internal API specification JSON
-└── app/                        # Main application code
-    ├── config.py               # Settings and environment loader
-    ├── ingestion/              # Multi-format document loader and chunker
-    ├── vectorstore/            # Pinecone connector & vector index
-    ├── agents/                 # LangGraph specialist agent nodes
-    ├── graph.py                # LangGraph flow compilation
-    └── main.py                 # Streamlit UI & CLI runner
-```
+## Local development
 
----
+### 1. Configure safe local defaults
 
-## How to Run
+~~~bash
+copy .env.example .env
+~~~
 
-### 1. Install Dependencies
-```bash
-pip install -r requirements.txt
-```
+On macOS/Linux, use cp instead of copy. The default configuration needs no cloud credentials and persists ChromaDB data under ./.axiom_chroma.
 
-### 2. Configure Environment Variables (Optional for Pinecone/NVIDIA NIM)
-Copy `.env.example` to `.env`:
-```bash
-cp .env.example .env
-```
+### 2. Start the API
 
-### 3. Run Command Line Interface (CLI) Mode
-```bash
-python app/main.py --cli
-```
+~~~bash
+python -m pip install -r requirements.txt
+uvicorn app.main:app --reload --port 8000
+~~~
 
-### 4. Run Streamlit Web Application
-```bash
-streamlit run app/main.py
-```
+API endpoints:
 
----
+- GET /api/v1/health
+- GET /api/v1/status
+- POST /api/v1/query
+- POST /api/v1/ingest
 
-## Verification & Sample Queries
+### 3. Start the React/Vite client
 
-- **HR & Policies**: *"Qual é a política de home office e o valor do vale refeição?"*
-- **Incident Response**: *"Como proceder em incidentes de severidade SEV-1?"*
-- **Engineering Architecture**: *"Como funciona a arquitetura de microsserviços e observability?"*
-- **Legal & Compliance**: *"Quais são os principais direitos dos titulares na política de LGPD?"*
+~~~bash
+pnpm --dir frontend install --frozen-lockfile
+pnpm --dir frontend dev
+~~~
+
+If pnpm is not installed, `npm --prefix frontend install` and `npm --prefix frontend run dev` provide the equivalent local workflow.
+
+Vite development proxies API traffic to the FastAPI server. Set VITE_API_BASE_URL only when the frontend is intentionally deployed on a different origin.
+
+## Containers and OCI handoff
+
+~~~bash
+docker compose up --build
+~~~
+
+This starts the browser entry point at http://localhost:8080 and the API at http://localhost:8000, with a named ChromaDB volume. The frontend image proxies /api/ to the API service. See docs/deployment.md for persistence, OCI, runtime-secret, and reset guidance.
+
+## Grounding contract
+
+Each query response contains an answer, selected domain/specialist, citations, grounding status, rewrite count, and a safe graph-trace event list. A citation records the origin file and available metadata; the response must not fabricate citations. If the corpus cannot substantiate a corporate claim, the API returns a direct limitation rather than an invented policy.
+
+## Repository guide
+
+~~~text
+app/                    Python FastAPI, graph, ingestion, and adapter modules
+frontend/               React/Vite client
+documentos/             Internal corpus fixtures
+docs/                   V3 architecture, API, delivery docs, and ADRs
+Dockerfile              API and frontend OCI-compatible image targets
+docker-compose.yml      Local API/frontend/persistent-ChromaDB topology
+.env.example            Safe runtime configuration template
+~~~
+
+## Validation commands
+
+~~~bash
+python -m compileall -q app
+pnpm --dir frontend build
+docker compose config --quiet
+~~~
+
+These are local checks, not a declaration that they have been run in a cloud environment.

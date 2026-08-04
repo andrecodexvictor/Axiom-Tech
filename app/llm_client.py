@@ -1,108 +1,185 @@
-import os
-import requests
-from typing import List, Dict, Any
-from app.config import settings
+"""Credential-optional NVIDIA model gateway with a grounded local fallback."""
 
-class UnifiedNVIDIAClient:
+from __future__ import annotations
+
+import logging
+import re
+from dataclasses import dataclass
+from typing import Iterable, List, Optional, Sequence
+
+from app.config import Settings, settings
+from app.vectorstore.port import RetrievedChunk
+
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class SynthesisResult:
+    answer: str
+    mode: str
+
+
+class NvidiaGateway:
+    """Small adapter around NVIDIA-compatible APIs.
+
+    Remote calls are disabled unless both ``AXIOM_NVIDIA_ENABLED=true`` and an
+    applicable credential are present.  Failures are intentionally logged only by
+    exception class; credentials and provider response bodies never reach logs or
+    API responses.
     """
-    Unified LLM Client managing 3-tier NVIDIA NIM API models:
-    1. Kimi K2.6 (moonshotai/kimi-k2.6) for Supervisor Reasoning
-    2. MiniMax M3 (minimaxai/minimax-m3) for Domain Specialist Inferences
-    3. DeepSeek V4 Pro (deepseek-ai/deepseek-v4-pro) for RAG Deep Search & Evaluation
-    """
 
-    def __init__(self):
-        self.kimi_key = settings.KIMI_API_KEY
-        self.minimax_key = settings.MINIMAX_API_KEY
-        self.deepseek_key = settings.DEEPSEEK_API_KEY
+    def __init__(self, configuration: Settings = settings) -> None:
+        self.configuration = configuration
 
-    def invoke_kimi(self, prompt: str, system_prompt: str = "") -> str:
-        """
-        Invokes Moonshot AI Kimi K2.6 for reasoning & supervisor classification.
-        """
-        try:
-            from langchain_nvidia_ai_endpoints import ChatNVIDIA
-            client = ChatNVIDIA(
-                model="moonshotai/kimi-k2.6",
-                api_key=self.kimi_key,
-                temperature=1,
-                top_p=1,
-                max_completion_tokens=16384
-            )
-            messages = []
-            if system_prompt:
-                messages.append({"role": "system", "content": system_prompt})
-            messages.append({"role": "user", "content": prompt})
+    @property
+    def remote_enabled(self) -> bool:
+        return self.configuration.remote_models_configured
 
-            response = client.invoke(messages)
-            return str(response.content)
-        except Exception as e:
-            print(f"[Kimi K2.6 Fallback Warning]: {e}")
-            return self._fallback_response("Kimi K2.6", prompt)
+    def synthesize(self, question: str, evidence: Sequence[RetrievedChunk]) -> SynthesisResult:
+        if self.remote_enabled and self.configuration.effective_nvidia_api_key:
+            answer = self._remote_synthesize(question, evidence)
+            if answer:
+                return SynthesisResult(answer=answer, mode="nvidia")
+        return SynthesisResult(answer=self._deterministic_synthesis(question, evidence), mode="deterministic")
 
-    def invoke_minimax(self, prompt: str, system_prompt: str = "") -> str:
-        """
-        Invokes MiniMax M3 via NVIDIA Chat Completions API endpoint.
-        """
-        try:
-            invoke_url = "https://integrate.api.nvidia.com/v1/chat/completions"
-            headers = {
-                "Authorization": f"Bearer {self.minimax_key}",
-                "Accept": "application/json"
-            }
-            messages = []
-            if system_prompt:
-                messages.append({"role": "system", "content": system_prompt})
-            messages.append({"role": "user", "content": prompt})
+    def status(self) -> dict:
+        return {
+            "gateway": "nvidia",
+            "remote_enabled": self.remote_enabled,
+            "model": self.configuration.nvidia_model,
+        }
 
-            payload = {
-                "model": "minimaxai/minimax-m3",
-                "messages": messages,
-                "temperature": 1,
-                "top_p": 0.95,
-                "max_tokens": 8192,
-                "stream": False
-            }
-            resp = requests.post(invoke_url, headers=headers, json=payload, timeout=15)
-            if resp.status_code == 200:
-                data = resp.json()
-                return data["choices"][0]["message"]["content"]
-            else:
-                raise ValueError(f"Status {resp.status_code}: {resp.text}")
-        except Exception as e:
-            print(f"[MiniMax M3 Fallback Warning]: {e}")
-            return self._fallback_response("MiniMax M3", prompt)
-
-    def invoke_deepseek_rag(self, prompt: str, context_docs: str = "") -> str:
-        """
-        Invokes DeepSeek V4 Pro via OpenAI client for RAG Deep Search & Document Synthesis.
-        """
+    def _remote_synthesize(self, question: str, evidence: Sequence[RetrievedChunk]) -> Optional[str]:
+        context = "\n\n".join(
+            "[{0}] {1}".format(item.metadata.get("source", "internal document"), item.content)
+            for item in evidence
+        )
         try:
             from openai import OpenAI
-            client = OpenAI(
-                base_url="https://integrate.api.nvidia.com/v1",
-                api_key=self.deepseek_key
-            )
-            full_prompt = f"Retrieved Context Documents:\n{context_docs}\n\nUser Question:\n{prompt}"
-            
-            completion = client.chat.completions.create(
-                model="deepseek-ai/deepseek-v4-pro",
-                messages=[
-                    {"role": "system", "content": "You are Axiom Tech's Grounded RAG Synthesizer powered by DeepSeek V4 Pro. Provide precise answers strictly citing the provided documents."},
-                    {"role": "user", "content": full_prompt}
-                ],
-                temperature=1,
-                top_p=0.95,
-                max_tokens=16384,
-                extra_body={"chat_template_kwargs": {"thinking": False}},
-                stream=False
-            )
-            return completion.choices[0].message.content
-        except Exception as e:
-            print(f"[DeepSeek V4 Pro Fallback Warning]: {e}")
-            return self._fallback_response("DeepSeek V4 Pro", prompt)
 
-    def _fallback_response(self, model_name: str, prompt: str) -> str:
-        return f"[{model_name} Response] Processed query: '{prompt[:60]}...'"
+            client = OpenAI(
+                base_url=self.configuration.nvidia_base_url,
+                api_key=self.configuration.effective_nvidia_api_key,
+            )
+            response = client.chat.completions.create(
+                model=self.configuration.nvidia_model,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "Answer only from the supplied internal evidence. "
+                            "If evidence does not establish a fact, say that it is not established. "
+                            "Use the same language as the user's question. "
+                            "Be concise and do not invent citations."
+                        ),
+                    },
+                    {"role": "user", "content": "Question: {0}\n\nEvidence:\n{1}".format(question, context)},
+                ],
+                temperature=0,
+                max_tokens=700,
+            )
+            content = response.choices[0].message.content
+            return content.strip() if content and content.strip() else None
+        except Exception as exc:  # Network/provider errors must not break grounded local operation.
+            logger.warning("NVIDIA synthesis unavailable (%s); using deterministic fallback", type(exc).__name__)
+            return None
+
+    @staticmethod
+    def _deterministic_synthesis(question: str, evidence: Sequence[RetrievedChunk]) -> str:
+        portuguese = NvidiaGateway._is_portuguese(question)
+        if not evidence:
+            return (
+                "Não encontrei evidência interna para responder a esta pergunta."
+                if portuguese
+                else "I could not find internal evidence that answers this question."
+            )
+        query_terms = set(re.findall(r"[\wÀ-ÿ][\wÀ-ÿ._/-]*", question.lower(), flags=re.UNICODE))
+        excerpts: List[str] = []
+        seen = set()
+        for item in evidence:
+            excerpt = NvidiaGateway._best_sentence(item.content, query_terms)
+            normalized = re.sub(r"\s+", " ", excerpt).strip()
+            if not normalized or normalized.lower() in seen:
+                continue
+            seen.add(normalized.lower())
+            source = str(item.metadata.get("source", "internal document"))
+            location = NvidiaGateway._location(item)
+            excerpts.append("{0}{1}: {2}".format(source, location, normalized))
+            if len(excerpts) == 3:
+                break
+        if not excerpts:
+            return (
+                "Encontrei documentos relacionados, mas nenhum trecho adequado para uma resposta fundamentada."
+                if portuguese
+                else "I found related internal documents, but no extract suitable for a grounded answer."
+            )
+        introduction = (
+            "Com base na documentação interna indexada:"
+            if portuguese
+            else "Based on the indexed internal documentation:"
+        )
+        return introduction + "\n\n" + "\n".join(
+            "- " + excerpt for excerpt in excerpts
+        )
+
+    @staticmethod
+    def _is_portuguese(question: str) -> bool:
+        value = question.lower()
+        if re.search(r"[áàâãéêíóôõúç]", value):
+            return True
+        words = set(re.findall(r"[a-z]+", value))
+        return bool(words & {"como", "qual", "quais", "devo", "segundo", "política", "incidente"})
+
+    @staticmethod
+    def _best_sentence(content: str, query_terms: set) -> str:
+        candidates = re.split(r"(?<=[.!?])\s+|\n+", content)
+        nonempty = [candidate.strip() for candidate in candidates if candidate.strip()]
+        if not nonempty:
+            return content.strip()[:500]
+        def rank(candidate: str) -> tuple:
+            words = set(re.findall(r"[\wÀ-ÿ][\wÀ-ÿ._/-]*", candidate.lower(), flags=re.UNICODE))
+            return (len(words & query_terms), -abs(len(candidate) - 260), candidate.lower())
+        return max(nonempty, key=rank)[:500]
+
+    @staticmethod
+    def _location(item: RetrievedChunk) -> str:
+        metadata = item.metadata
+        if metadata.get("page") is not None:
+            return " (page {0})".format(metadata["page"])
+        if metadata.get("slide") is not None:
+            return " (slide {0})".format(metadata["slide"])
+        if metadata.get("sheet"):
+            return " (sheet {0})".format(metadata["sheet"])
+        return ""
+
+
+class UnifiedNVIDIAClient:
+    """Compatibility facade for previous agent imports.
+
+    It deliberately returns local deterministic results instead of sending a
+    credential-free request with an empty bearer token.
+    """
+
+    def __init__(self, configuration: Settings = settings) -> None:
+        self.gateway = NvidiaGateway(configuration)
+
+    def invoke_kimi(self, prompt: str, system_prompt: str = "") -> str:
+        # Preserve an inexpensive routing-compatible result for legacy agents.
+        words = (prompt + " " + system_prompt).lower()
+        if any(word in words for word in ("lgpd", "privacidade", "termo", "legal")):
+            return "juridico"
+        if any(word in words for word in ("benefício", "beneficio", "onboarding", "home office", "rh")):
+            return "rh"
+        if any(word in words for word in ("endpoint", "api", "repo", "github")):
+            return "repo"
+        return "engenharia"
+
+    def invoke_minimax(self, prompt: str, system_prompt: str = "") -> str:
+        return "A local grounded response is available through the V3 query workflow."
+
+    def invoke_deepseek_rag(self, prompt: str, context_docs: str = "") -> str:
+        return "A local grounded response is available through the V3 query workflow."
+
 
 nvidia_client = UnifiedNVIDIAClient()

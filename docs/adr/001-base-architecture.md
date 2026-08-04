@@ -5,7 +5,7 @@ We need to define a consistent, scalable architectural style for this project th
 
 ## Decision Outcome
 * Chosen High-Level Architecture: **modular-monolith**
-* Chosen Internal Design Pattern: **layered**
+* Chosen Internal Design Pattern: **layered-with-ports-at-integration-seams**
 
 ### Rationale
 * The selected architecture matches our constraints.
@@ -24,4 +24,4 @@ We need to define a consistent, scalable architectural style for this project th
 Approved
 
 ## Date
-2026-08-03
+2026-08-04

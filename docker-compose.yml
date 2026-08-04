@@ -1,0 +1,57 @@
+services:
+  api:
+    build:
+      context: .
+      target: api
+    environment:
+      AXIOM_DOCUMENTS_DIR: /app/documentos
+      AXIOM_CHROMA_PATH: /data/chroma
+      AXIOM_CHROMA_COLLECTION: ${AXIOM_CHROMA_COLLECTION:-axiom_knowledge}
+      AXIOM_VECTOR_BACKEND: ${AXIOM_VECTOR_BACKEND:-chroma}
+      AXIOM_NVIDIA_ENABLED: ${AXIOM_NVIDIA_ENABLED:-false}
+      NVIDIA_API_KEY: ${NVIDIA_API_KEY:-}
+      NVIDIA_MODEL: ${NVIDIA_MODEL:-meta/llama-3.1-70b-instruct}
+      AXIOM_NVIDIA_BASE_URL: ${AXIOM_NVIDIA_BASE_URL:-https://integrate.api.nvidia.com/v1}
+      AXIOM_CORS_ORIGINS: ${AXIOM_CORS_ORIGINS:-http://localhost:5173,http://localhost:8080}
+      KIMI_API_KEY: ${KIMI_API_KEY:-}
+      MINIMAX_API_KEY: ${MINIMAX_API_KEY:-}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      AXIOM_WEB_ENABLED: ${AXIOM_WEB_ENABLED:-false}
+      SERPER_API_KEY: ${SERPER_API_KEY:-}
+      AXIOM_WEB_ALLOWLIST: ${AXIOM_WEB_ALLOWLIST:-docs.python.org,docs.nvidia.com,docs.langchain.com,github.com}
+      AXIOM_WEB_TIMEOUT_SECONDS: ${AXIOM_WEB_TIMEOUT_SECONDS:-8}
+      AXIOM_WEB_MAX_RESPONSE_BYTES: ${AXIOM_WEB_MAX_RESPONSE_BYTES:-1000000}
+      PINECONE_API_KEY: ${PINECONE_API_KEY:-}
+      PINECONE_INDEX_NAME: ${PINECONE_INDEX_NAME:-}
+      PINECONE_ENVIRONMENT: ${PINECONE_ENVIRONMENT:-}
+    ports:
+      - "8000:8000"
+    volumes:
+      - chroma_data:/data
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health', timeout=3)"
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: .
+      target: frontend
+      args:
+        VITE_API_BASE_URL: ""
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "8080:80"
+    restart: unless-stopped
+
+volumes:
+  chroma_data:

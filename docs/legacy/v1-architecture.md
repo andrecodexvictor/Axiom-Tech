@@ -1,6 +1,7 @@
 # DotArchitecture Specification: Axiom Tech Corporate AI Agent (V1)
 
 ## 1. System Overview
+
 The Axiom Tech Corporate AI Agent is an enterprise Agentic RAG system powered by LangGraph, NVIDIA LLMs, and Pinecone Vector Database. It acts as a centralized conversational knowledge engine across internal enterprise domains.
 
 ## 2. Multi-Agent Architecture (LangGraph Topology)
@@ -8,7 +9,7 @@ The Axiom Tech Corporate AI Agent is an enterprise Agentic RAG system powered by
 ```mermaid
 graph TD
     User([User Query]) --> Supervisor[Supervisor Agent]
-    
+
     Supervisor -->|Internal Policy/RH/General| DocAgent[Documentation RAG Agent]
     Supervisor -->|Engineering/Incidents/Architecture| EngAgent[Engineering Agent]
     Supervisor -->|LGPD/Privacy/Internal Terms| LegalAgent[Legal & Compliance Agent]
@@ -23,7 +24,7 @@ graph TD
 
     Grader -->|Relevant & Grounded| Synthesizer[Response Synthesizer with Citations]
     Grader -->|Low Relevance / Missing Info| Rewrite[Query Rewrite Node]
-    
+
     Rewrite --> Supervisor
     Synthesizer --> User
 ```
@@ -40,12 +41,14 @@ graph TD
 | **Web Research Agent** | Performs controlled external technical research (plan -> fetch -> evaluate -> synthesize). | Serper / Web Scraping Tool |
 
 ## 4. Ingestion & RAG Pipeline Architecture
+
 - **Supported Formats**: PDF, Word (DOCX), PowerPoint (PPTX), Excel (XLSX), Markdown (MD), CSV, JSON, HTML.
 - **Normalization**: Extract raw text -> clean metadata -> Unified Document Schema.
 - **Chunking**: Recursive character text splitter (Chunk Size: 1000, Overlap: 200).
 - **Embedding & Storage**: Pinecone Vector Index with metadata filters (`domain`, `source_file`, `author`, `updated_at`).
 
 ## 5. Anti-Hallucination Guardrails
+
 1. **Grounded RAG**: All corporate answers MUST strictly cite retrieved internal document passages.
 2. **Grade Documents Node**: Assesses relevance score of retrieved passages prior to answer generation.
 3. **Query Rewrite Loop**: Maximum 2 retry loops if retrieved context fails relevance criteria.

@@ -3,6 +3,7 @@ __pycache__/
 *.py[cod]
 *$py.class
 .pytest_cache/
+.axiom_chroma/
 
 # Virtual Environments
 venv/
@@ -20,6 +21,7 @@ npm-debug.log*
 # Scratch & temporary artifacts
 scratch/
 .system_generated/
+.architecture/
 *.log
 
 # OS generated files

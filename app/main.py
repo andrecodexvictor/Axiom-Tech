@@ -1,138 +1,128 @@
-import sys
+"""FastAPI entry point and backwards-compatible command-line interface."""
+
+from __future__ import annotations
+
 import argparse
-from pathlib import Path
+import logging
+from typing import Optional
 
-# Add project root to sys.path
-BASE_DIR = Path(__file__).resolve().parent.parent
-if str(BASE_DIR) not in sys.path:
-    sys.path.insert(0, str(BASE_DIR))
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 
-from app.config import settings
-from app.ingestion.loader import DocumentLoader
-from app.ingestion.chunker import DocumentChunker
-from app.vectorstore.pinecone_client import vector_store
-from app.graph import axiom_graph
+from app import __version__
+from app.config import Settings, settings
+from app.schemas import (
+    HealthResponse,
+    IngestRequest,
+    IngestResponse,
+    QueryRequest,
+    QueryResponse,
+    StatusResponse,
+)
+from app.service import KnowledgeService, create_knowledge_service
 
-def initialize_knowledge_base():
-    """
-    Ingests all internal multi-format documents from documents/ and indexes vector embeddings.
-    """
-    print(f"[Ingestion] Loading internal documents from: {settings.DOCUMENTS_DIR}")
-    raw_docs = DocumentLoader.load_directory(settings.DOCUMENTS_DIR)
-    print(f"[Ingestion] Extracted {len(raw_docs)} document files.")
 
-    chunker = DocumentChunker()
-    chunks = chunker.split_documents(raw_docs)
-    print(f"[Ingestion] Created {len(chunks)} text chunks.")
+logger = logging.getLogger(__name__)
 
-    count = vector_store.index_documents(chunks)
-    print(f"[Ingestion] Successfully indexed {count} document chunks into VectorStore.")
 
-def run_cli():
-    print("=" * 65)
-    print("      AXIOM TECH CORPORATE AI AGENT - V1 COMMAND LINE INTERFACE")
-    print("=" * 65)
-    
+def create_app(
+    service: Optional[KnowledgeService] = None, configuration: Settings = settings
+) -> FastAPI:
+    """Build an API instance; injected services make integration tests isolated."""
+
+    application = FastAPI(title="Axiom Tech Knowledge API", version=__version__)
+    application.add_middleware(
+        CORSMiddleware,
+        allow_origins=list(configuration.cors_origins),
+        allow_credentials=False,
+        allow_methods=["GET", "POST"],
+        allow_headers=["*"],
+    )
+    application.state.knowledge_service = service or create_knowledge_service(configuration)
+
+    @application.get("/api/v1/health", response_model=HealthResponse)
+    def health() -> dict:
+        return {"status": "ok", "version": __version__}
+
+    @application.get("/api/v1/status", response_model=StatusResponse)
+    def status() -> dict:
+        return application.state.knowledge_service.status()
+
+    @application.post(
+        "/api/v1/ingest", response_model=IngestResponse, response_model_exclude_none=True
+    )
+    def ingest(request: IngestRequest) -> dict:
+        try:
+            return application.state.knowledge_service.ingest(request.path).as_dict()
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail="Ingestion target was not found") from exc
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail="Ingestion target is outside the configured documents directory") from exc
+        except Exception as exc:
+            logger.error("Ingestion failed (%s)", type(exc).__name__)
+            raise HTTPException(status_code=503, detail="Ingestion is temporarily unavailable") from exc
+
+    @application.post("/api/v1/query", response_model=QueryResponse, response_model_exclude_none=True)
+    def query(request: QueryRequest) -> dict:
+        try:
+            return application.state.knowledge_service.query(
+                request.question, domain=request.domain, top_k=request.top_k
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail="Question is invalid") from exc
+        except Exception as exc:
+            logger.error("Query failed (%s)", type(exc).__name__)
+            raise HTTPException(status_code=503, detail="Query service is temporarily unavailable") from exc
+
+    return application
+
+
+app = create_app()
+
+
+def initialize_knowledge_base(path: Optional[str] = None) -> dict:
+    """Legacy CLI helper retained for existing scripts."""
+
+    report = app.state.knowledge_service.ingest(path)
+    result = report.as_dict()
+    print(
+        "[Ingestion] received={received} inserted={inserted} updated={updated} unchanged={unchanged} skipped={skipped}".format(
+            **result
+        )
+    )
+    return result
+
+
+def run_cli() -> None:
+    print("Axiom Tech Knowledge Assistant V3")
     initialize_knowledge_base()
-
-    print("\nSystem ready! Type your question below (or 'exit' to quit):\n")
+    print("Ready. Type a question, or 'exit' to quit.")
     while True:
         try:
-            user_input = input("\n[Employee Question]: ").strip()
-            if not user_input or user_input.lower() in ["exit", "quit"]:
-                print("Goodbye!")
-                break
-            
-            result = axiom_graph.run(user_input)
+            question = input("\n[Employee Question]: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print("\nGoodbye!")
+            return
+        if not question or question.lower() in {"exit", "quit"}:
+            print("Goodbye!")
+            return
+        try:
+            result = app.state.knowledge_service.query(question)
+            print("\n[{0} | {1}]\n{2}".format(result["domain"], result["specialist"], result["answer"]))
+            if result["citations"]:
+                print("\nSources:")
+                for citation in result["citations"]:
+                    print("- {0}".format(citation["source"]))
+        except Exception as exc:
+            print("[Error] {0}".format(type(exc).__name__))
 
-            print("\n" + "-" * 50)
-            print(f"Domain: {result['classified_domain'].upper()} | Agent: {result['next_agent']}")
-            print("-" * 50)
-            print(result["final_answer"])
-            if result["sources"]:
-                print("\nSources Consulted:")
-                for src in result["sources"]:
-                    print(f" - {src}")
-            print("-" * 50)
-
-        except KeyboardInterrupt:
-            break
-        except Exception as e:
-            print(f"[Error] Execution failed: {e}")
-
-def run_streamlit():
-    import streamlit as st
-
-    st.set_page_config(
-        page_title="Axiom Tech Corporate AI Agent",
-        page_icon="🤖",
-        layout="wide"
-    )
-
-    # Custom styling
-    st.markdown("""
-        <style>
-            .main-header { font-size: 2.2rem; color: #1E88E5; font-weight: bold; margin-bottom: 0px; }
-            .sub-header { font-size: 1.1rem; color: #555555; margin-bottom: 20px; }
-            .source-badge { background-color: #E3F2FD; color: #0D47A1; padding: 4px 8px; border-radius: 4px; font-size: 0.85rem; }
-        </style>
-    """, unsafe_allow_html=True)
-
-    st.markdown('<div class="main-header">Axiom Tech Corporate AI Agent</div>', unsafe_allow_html=True)
-    st.markdown('<div class="sub-header">Agentic RAG Knowledge Base — HR, Legal, Engineering & Operations</div>', unsafe_allow_html=True)
-
-    # Sidebar initialization
-    with st.sidebar:
-        st.header("⚙️ Configuration & Indexing")
-        if st.button("🔄 Ingest Internal Documents", use_container_width=True):
-            with st.spinner("Ingesting multi-format internal documents..."):
-                initialize_knowledge_base()
-                st.success("Internal knowledge base successfully updated!")
-
-        st.divider()
-        st.markdown("**System Architecture**: Multi-Agent LangGraph")
-        st.markdown("**LLM Motor**: NVIDIA NIM API")
-        st.markdown("**Vector Store**: Pinecone Vector DB")
-        st.markdown("**Anti-Hallucination**: Grounded RAG + Grade/Rewrite")
-
-    # Initialize chat history
-    if "messages" not in st.session_state:
-        st.session_state.messages = []
-        # Pre-initialize knowledge base on first load
-        initialize_knowledge_base()
-
-    # Display prior conversation
-    for msg in st.session_state.messages:
-        with st.chat_message(msg["role"]):
-            st.markdown(msg["content"])
-
-    # User chat input
-    if prompt := st.chat_input("Ask a question about policies, incidents, backend guidelines, LGPD..."):
-        st.session_state.messages.append({"role": "user", "content": prompt})
-        with st.chat_message("user"):
-            st.markdown(prompt)
-
-        with st.chat_message("assistant"):
-            with st.spinner("Consulting domain specialist agents..."):
-                res = axiom_graph.run(prompt)
-                
-                answer_text = f"**[{res['classified_domain'].upper()} DOMAIN | AGENT: {res['next_agent']}]**\n\n" + res["final_answer"]
-                if res["sources"]:
-                    answer_text += "\n\n**Sources Consulted:**\n" + "\n".join([f"- `{src}`" for src in res["sources"]])
-
-                st.markdown(answer_text)
-                st.session_state.messages.append({"role": "assistant", "content": answer_text})
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Axiom Tech Corporate AI Agent Launcher")
-    parser.add_argument("--cli", action="store_true", help="Run in Command Line Interface mode")
+    parser = argparse.ArgumentParser(description="Axiom Tech Knowledge Assistant V3")
+    parser.add_argument("--cli", action="store_true", help="Run the interactive CLI")
+    parser.add_argument("--ingest", action="store_true", help="Ingest documents and exit")
     args = parser.parse_args()
-
-    if args.cli:
-        run_cli()
+    if args.ingest:
+        initialize_knowledge_base()
     else:
-        # Check if running via Streamlit
-        if "streamlit" in sys.modules:
-            run_streamlit()
-        else:
-            run_cli()
+        run_cli()

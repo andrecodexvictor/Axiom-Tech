@@ -1,4 +1,3 @@
-"""
-Axiom Tech Corporate AI Agent Package
-"""
-__version__ = "1.0.0"
+"""Axiom Tech corporate knowledge assistant."""
+
+__version__ = "3.0.0"

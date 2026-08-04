@@ -1,40 +1,53 @@
-# DotStack Specification: Axiom Tech Technical Stack
+# DotStack Specification: Axiom Tech V3 Technical Stack
 
-## 1. Technology Stack Overview
+## Status and compatibility
 
-```
-[ Frontend / UI Layer ]      Streamlit Web App / CLI
-          │
-[ Agent Orchestration ]      LangGraph + LangChain Core
-          │
-[ LLM Reasoning Engine ]    NVIDIA NIM API (meta/llama-3.1-70b-instruct / mistral)
-          │
-[ Vector Storage & RAG ]     Pinecone Vector Database
-          │
-[ Data Ingestion Engine ]    PyPDF, python-docx, openpyxl, pandas, BeautifulSoup4
-          │
-[ Infrastructure & Cloud ]  Oracle Cloud Infrastructure (OCI Compute / GenAI Containers)
-```
+This is the V3 stack contract. It supersedes the V1 Streamlit/Pinecone-first description for new work while allowing legacy files to remain during migration. A production OCI deployment is not asserted by this document.
 
-## 2. Dependencies & Components
+## Architecture shape
 
-| Component | Library / Tool | Purpose |
-| :--- | :--- | :--- |
-| **Language** | Python 3.11+ | Primary runtime environment |
-| **LLM Engine** | `langchain-nvidia-ai-endpoints` | High-performance inference via NVIDIA NIM API |
-| **Orchestration** | `langgraph` >= 0.2.0 | Multi-agent graph state routing & feedback loops |
-| **Vector DB** | `pinecone-client`, `langchain-pinecone` | Vector indexing, metadata filtering, semantic search |
-| **Embeddings** | NVIDIA Embeddings / SentenceTransformers | Dense vector representation for text chunks |
-| **Multi-Format Parsers** | `pypdf`, `python-docx`, `openpyxl`, `pandas`, `beautifulsoup4`, `markdown` | File ingestion (PDF, DOCX, XLSX, CSV, JSON, HTML, MD) |
-| **Web UI** | `streamlit` | Modern conversational user interface for employees |
-| **Environment Configuration**| `python-dotenv`, `pydantic-settings` | Secure credential management |
+A Python modular monolith exposes a FastAPI boundary. The backend keeps API, application use cases, LangGraph orchestration, ingestion, retrieval adapters, and model gateways independently testable without splitting them into networked services. The React/Vite client consumes the versioned HTTP API.
 
-## 3. Environment Variables (.env)
-```env
-NVIDIA_API_KEY=nvapi-...
-PINECONE_API_KEY=pcsk_...
-PINECONE_INDEX_NAME=axiom-tech-knowledge
-PINECONE_ENVIRONMENT=us-east-1
-EMBEDDING_MODEL=nvidia/nv-embed-v1
-LLM_MODEL=meta/llama-3.1-70b-instruct
-```
+## Primary components
+
+| Concern | V3 choice | Rationale |
+| --- | --- | --- |
+| Runtime | Python 3.11+ | Mature document, AI, and API ecosystem. |
+| API | FastAPI plus Uvicorn | Typed HTTP contract, health probes, and clear client boundary. |
+| Orchestration | LangGraph StateGraph | Real conditional workflow with routing, evidence grading, bounded rewrites, synthesis, and fallback. |
+| Default vector store | Persistent ChromaDB | Local-first, secret-free retrieval that can persist on an OCI volume. |
+| Optional vector store | Pinecone adapter boundary | Intentionally fails transparently until a deployment-specific adapter is completed. |
+| Default model behavior | Deterministic local providers | Repeatable offline development and tests. |
+| Optional model provider | NVIDIA NIM | Opt-in remote inference; credentials are never required for local functionality. |
+| Ingestion | Python extractors and normalized metadata | Multi-format corpus ingestion with source/file/chunk/locator preservation. |
+| Web client | React + Vite | Accessible, independently deployable browser workspace. |
+| Delivery | Docker, Docker Compose, OCI-compatible images | Repeatable local topology and a clear OCI handoff. |
+
+## V3 runtime modes
+
+| Mode | Vector store | Model behavior | Required secrets |
+| --- | --- | --- | --- |
+| Offline/local default | ChromaDB at AXIOM_CHROMA_PATH | Deterministic providers | None |
+| Optional NVIDIA mode | ChromaDB by default | NVIDIA NIM when AXIOM_NVIDIA_ENABLED=true | Relevant NVIDIA key(s) |
+| Optional Pinecone mode | Pinecone adapter boundary | Deterministic or NVIDIA | Requires a completed deployment adapter; otherwise fails transparently |
+
+A selected optional provider must fail transparently if it is incomplete or unavailable; it must not masquerade as the local default.
+
+## Configuration
+
+- AXIOM_DOCUMENTS_DIR identifies the internal corpus.
+- AXIOM_VECTOR_BACKEND defaults to chroma.
+- AXIOM_CHROMA_PATH and AXIOM_CHROMA_COLLECTION configure persistent local retrieval.
+- AXIOM_NVIDIA_ENABLED defaults to false.
+- AXIOM_CORS_ORIGINS controls browser origins at the FastAPI boundary.
+- PINECONE_* and model keys are optional runtime secrets, never committed values.
+
+See .env.example for safe defaults and docs/deployment.md for container/OCI guidance.
+
+## Delivery constraints
+
+- Mount durable storage for ChromaDB in any container runtime expected to retain an index.
+- Keep API and frontend images separable; the frontend reverse-proxies /api/ in the local Compose topology.
+- Preserve source metadata across ingestion and retrieval.
+- Do not add a cloud provider, external vector database, or external LLM as a mandatory development dependency.
+- Do not treat a legacy UI, a static build artifact, or a simulated response as evidence of V3 API behavior.

@@ -1,12 +1,32 @@
-from typing import TypedDict, List, Dict, Any
+"""Typed state carried through the V3 LangGraph workflow."""
 
-class AgentState(TypedDict):
+from __future__ import annotations
+
+from typing import Any, Dict, List, Optional, TypedDict
+
+
+class GraphTraceEvent(TypedDict):
+    node: str
+    event: str
+    details: str
+
+
+class AgentState(TypedDict, total=False):
     question: str
-    classified_domain: str
-    next_agent: str
-    retrieved_docs: List[Dict[str, Any]]
+    requested_domain: Optional[str]
+    active_question: str
+    top_k: int
+    domain: str
+    classified_domain: str  # Retained for V1 CLI compatibility.
+    specialist: str
+    next_agent: str  # Retained for V1 CLI compatibility.
+    retrieved_docs: List[Any]
     grade_status: str
     rewrite_count: int
     final_answer: str
     sources: List[str]
+    citations: List[Dict[str, Any]]
+    trace: List[GraphTraceEvent]
     messages: List[Dict[str, str]]
+    grounded: bool
+    synthesis_mode: str
