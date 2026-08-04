@@ -15,3 +15,5 @@ scaffoldVersion: "2.0.0"
 The frontend uses TypeScript compilation and a production Vite build as its static quality gates: `npm --prefix frontend run check` and `npm --prefix frontend run build`. Browser QA should verify desktop layout, 390px mobile width, query submission, error states, citations, and keyboard focus.
 
 Before release, also run `python -m compileall -q app`, `pip check`, `docker compose config --quiet`, `git diff --check`, and a secret-pattern scan that excludes local `.env` files.
+
+For the OCI smoke test, verify `/api/v1/health`, `/api/v1/status`, explicit ingestion, a grounded citation, Chroma persistence after restart, and LangSmith status/trace delivery when observability is enabled. Do not use a real provider key in automated tests.

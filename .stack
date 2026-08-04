@@ -21,7 +21,9 @@ A Python modular monolith exposes a FastAPI boundary. The backend keeps API, app
 | Optional model provider | NVIDIA NIM | Opt-in remote inference; credentials are never required for local functionality. |
 | Ingestion | Python extractors and normalized metadata | Multi-format corpus ingestion with source/file/chunk/locator preservation. |
 | Web client | React + Vite | Accessible, independently deployable browser workspace. |
-| Delivery | Docker, Docker Compose, OCI-compatible images | Repeatable local topology and a clear OCI handoff. |
+| Delivery | Docker, Docker Compose, OCI Compute/Block Volume, optional OCIR | Repeatable local topology and a durable first OCI deployment path. |
+| Runtime secrets | OCI Vault in cloud; `.env` only for local development | Provider and observability credentials remain outside Git and images. |
+| Observability | LangSmith tracing for LangGraph and wrapped provider calls | Opt-in production traces with inputs/outputs hidden by default. |
 
 ## V3 runtime modes
 
@@ -51,3 +53,5 @@ See .env.example for safe defaults and docs/deployment.md for container/OCI guid
 - Preserve source metadata across ingestion and retrieval.
 - Do not add a cloud provider, external vector database, or external LLM as a mandatory development dependency.
 - Do not treat a legacy UI, a static build artifact, or a simulated response as evidence of V3 API behavior.
+- Use OCI Compute as the first go-live target unless the vector-store persistence design changes; Container Instances are not the default persistence target.
+- Enable LangSmith only with a reviewed runtime secret and keep trace payload masking enabled by default.

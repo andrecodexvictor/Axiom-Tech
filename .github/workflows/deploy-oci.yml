@@ -1,0 +1,88 @@
+name: Deploy OCI
+
+on:
+  workflow_run:
+    workflows: ["V3 CI"]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-oci
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+      url: ${{ vars.PUBLIC_URL }}
+    env:
+      RELEASE_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+      OCI_DEPLOY_HOST: ${{ vars.OCI_DEPLOY_HOST }}
+      OCI_DEPLOY_USER: ${{ vars.OCI_DEPLOY_USER }}
+      OCI_DEPLOY_PATH: ${{ vars.OCI_DEPLOY_PATH }}
+      PUBLIC_URL: ${{ vars.PUBLIC_URL }}
+
+    steps:
+      - name: Validate deployment settings
+        shell: bash
+        run: |
+          set -eu
+          test -n "$OCI_DEPLOY_HOST"
+          test -n "$OCI_DEPLOY_USER"
+          test -n "$OCI_DEPLOY_PATH"
+          test -n "$PUBLIC_URL"
+          case "$PUBLIC_URL" in
+            https://*) ;;
+            *) echo "PUBLIC_URL must use HTTPS"; exit 1 ;;
+          esac
+
+      - name: Configure SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.OCI_SSH_PRIVATE_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.OCI_KNOWN_HOSTS }}
+        shell: bash
+        run: |
+          set -eu
+          test -n "$SSH_PRIVATE_KEY"
+          test -n "$SSH_KNOWN_HOSTS"
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$HOME/.ssh/axiom-oci"
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/axiom-oci" "$HOME/.ssh/known_hosts"
+
+      - name: Deploy approved commit
+        shell: bash
+        run: |
+          set -eu
+          ssh -i "$HOME/.ssh/axiom-oci" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes "$OCI_DEPLOY_USER@$OCI_DEPLOY_HOST" "RELEASE_SHA='$RELEASE_SHA' DEPLOY_PATH='$OCI_DEPLOY_PATH' PUBLIC_URL='$PUBLIC_URL' bash -s" <<'REMOTE'
+          set -eu
+
+          case "$RELEASE_SHA" in
+            ''|*[!0-9a-f]*) echo "Invalid release SHA"; exit 1 ;;
+          esac
+
+          sudo -n chown -R "$(id -u):$(id -g)" "$DEPLOY_PATH"
+          cd "$DEPLOY_PATH"
+          git fetch --prune origin "$RELEASE_SHA"
+          git reset --hard "$RELEASE_SHA"
+          git clean -fd
+          test -s .env
+
+          sudo -n env AXIOM_CORS_ORIGINS="$PUBLIC_URL" docker compose -f docker-compose.yml -f docker-compose.oci.yml -f docker-compose.gateway.yml config --quiet
+          sudo -n env AXIOM_CORS_ORIGINS="$PUBLIC_URL" docker compose -f docker-compose.yml -f docker-compose.oci.yml -f docker-compose.gateway.yml up -d --build --remove-orphans
+          sudo -n env AXIOM_CORS_ORIGINS="$PUBLIC_URL" docker compose -f docker-compose.yml -f docker-compose.oci.yml -f docker-compose.gateway.yml exec -T api python -m app.main --ingest
+
+          curl --fail --silent --show-error --retry 10 --retry-delay 3 http://127.0.0.1:8080/api/v1/health
+          REMOTE
+
+      - name: Verify public URL
+        shell: bash
+        run: |
+          set -eu
+          curl --fail --silent --show-error --retry 10 --retry-delay 5 "$PUBLIC_URL/api/v1/health"

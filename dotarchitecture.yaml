@@ -21,6 +21,11 @@ recommendedDevStyle:
 observabilityDeployGuidelines:
   - Application Performance Monitoring (APM) para acompanhar gargalos de rota e
     consumo de CPU
+  - LangSmith tracing opt-in para o grafo LangGraph e chamadas de provedor, com
+    inputs e outputs ocultos por padrão
+  - OCI Vault para chaves de IA, LangSmith e demais segredos de runtime
+  - OCI Compute com volume durável para o primeiro go-live; não declarar
+    persistência em Container Instances sem uma estratégia de armazenamento
   - Rotação e agregação local de logs
   - Deploy Rolling Update simples ou Blue-Green básico
 warnings: []

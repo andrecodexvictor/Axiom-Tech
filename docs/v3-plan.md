@@ -45,6 +45,12 @@ Turn the current proof of concept into a locally runnable, testable corporate kn
    - Update setup, architecture, environment, API, and demo documentation.
    - Run Python tests, frontend tests/build, architecture verification, and stack audit before committing.
 
+6. Go-live and challenge evidence
+   - Use OCI Compute as the first deployable target with durable Chroma storage.
+   - Keep NVIDIA, web-research, and LangSmith credentials in OCI Vault/runtime configuration.
+   - Verify health, ingestion, grounded citations, restart persistence, and LangSmith trace delivery.
+   - Add a sanitized online screenshot or video to README after the deployment is actually reachable.
+
 ## Acceptance criteria
 
 - `POST /api/v1/query` returns a grounded answer, domain, specialist, sources, and graph trace.
@@ -54,3 +60,4 @@ Turn the current proof of concept into a locally runnable, testable corporate kn
 - The React interface calls the real API and passes accessibility and responsive smoke checks.
 - Automated tests and production builds pass from a clean checkout.
 - Architecture, context, stack, README, and environment examples describe the implementation rather than an aspirational system.
+- The OCI URL and online execution evidence are recorded before claiming challenge completion.

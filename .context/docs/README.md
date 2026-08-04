@@ -12,6 +12,9 @@ Welcome to the repository knowledge base. Start with the project overview, then 
 - [Data Flow & Integrations](./data-flow.md)
 - [Security & Compliance Notes](./security.md)
 - [Tooling & Productivity Guide](./tooling.md)
+- [Challenge Checklist](../../docs/challenge-checklist.md)
+- [OCI MCP Deployment](../../docs/oci-mcp-deployment.md)
+- [LangSmith Observability](../../docs/observability.md)
 
 ## Repository Snapshot
 - `.github/`

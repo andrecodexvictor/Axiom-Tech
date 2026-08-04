@@ -4,6 +4,7 @@ uvicorn[standard]>=0.52,<0.53
 pydantic>=2.13,<3.0
 python-dotenv>=1.0,<2.0
 langgraph>=0.6.11,<0.7
+langsmith>=0.3.45,<1.0
 chromadb>=0.6.3,<0.7
 # Chroma 0.6 calls the pre-v6 PostHog capture signature even when anonymized
 # telemetry is disabled; the upper bound prevents noisy runtime failures.

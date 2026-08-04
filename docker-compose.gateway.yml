@@ -1,0 +1,9 @@
+# OCI API Gateway override.
+# The API Gateway reaches the frontend through the VM private address on port 8080.
+services:
+  api:
+    ports: !reset []
+
+  frontend:
+    ports:
+      - "8080:80"

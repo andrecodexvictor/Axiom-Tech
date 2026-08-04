@@ -59,3 +59,11 @@ Responses also include safe execution metadata: selected domain/specialist, grap
 - The query rewrite loop is bounded to two attempts.
 - Local deterministic behavior covers routing, embeddings, retrieval, citations, and fallback answers without cloud credentials.
 - Corpus refresh is an explicit administrative action with per-file outcomes.
+
+## Challenge and go-live context
+
+The Alura Agentes challenge requires a public GitHub repository, an online deployment using at least one OCI service, and a screenshot or video proving the online execution. The repository must not claim the last two outcomes until a real URL, grounded answer, and sanitized capture have been verified.
+
+The first deployment target is an OCI Compute VM running the existing Compose topology. ChromaDB requires durable writable storage, so the cloud profile uses an OCI Block Volume and keeps provider/LangSmith credentials in OCI Vault. The Oracle OCI Cloud MCP server is used for read-before-write resource discovery and OCI SDK operations.
+
+LangSmith is an opt-in observability boundary. LangGraph traces and wrapped provider spans are enabled only with runtime configuration. Inputs and outputs are hidden by default because traces can contain questions, prompts, and retrieved corpus content.

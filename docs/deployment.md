@@ -12,6 +12,8 @@ The repository contains OCI-oriented container configuration. This guide does **
 
 The images are intentionally separable for OCI Compute, OCI Container Instances, or another OCI-compatible runtime. The frontend can also be hosted separately; in that case set VITE_API_BASE_URL during the frontend build and configure FastAPI CORS with AXIOM_CORS_ORIGINS.
 
+For the challenge’s first live proof, use [docs/oci-mcp-deployment.md](oci-mcp-deployment.md). It selects OCI Compute plus a durable Block Volume and OCI Vault because the default ChromaDB index must survive a container restart. The runbook also defines the Oracle OCI Cloud MCP read-before-write workflow.
+
 ## Local containers
 
 ~~~bash
@@ -36,7 +38,11 @@ To remove the named ChromaDB volume as an intentional reset, use docker compose 
 4. Expose the frontend through the selected ingress/load-balancer path and set AXIOM_CORS_ORIGINS if it is cross-origin from the API.
 5. Permit outbound egress only when using optional NVIDIA NIM, Pinecone, or the explicit external-research route.
 
+6. If LangSmith is approved, set `LANGSMITH_TRACING=true`, `LANGSMITH_API_KEY`, `LANGSMITH_PROJECT`, and the correct `LANGSMITH_ENDPOINT` as runtime secrets. Keep `LANGSMITH_HIDE_INPUTS=true` and `LANGSMITH_HIDE_OUTPUTS=true` until the data-retention review allows trace payloads.
+
 OCI Container Instances may use ephemeral filesystem storage unless a suitable persistent volume is attached. Do not rely on ephemeral storage for the default ChromaDB index; attach persistent storage or explicitly choose the optional Pinecone adapter.
+
+The current first-deploy decision is recorded in [ADR 006](adr/006-oci-go-live-and-observability.md). It is a deployment target and runbook, not a claim that OCI resources already exist.
 
 ## Runtime configuration
 

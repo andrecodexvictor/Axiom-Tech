@@ -31,3 +31,20 @@ def test_insecure_nvidia_endpoint_falls_back_to_the_hosted_https_endpoint(monkey
     configured = Settings.from_env()
 
     assert configured.nvidia_base_url == "https://integrate.api.nvidia.com/v1"
+
+
+def test_langsmith_configuration_is_opt_in_and_does_not_expose_the_key(monkeypatch) -> None:
+    monkeypatch.setenv("LANGSMITH_TRACING", "true")
+    monkeypatch.setenv("LANGSMITH_API_KEY", "test-langsmith-key")
+    monkeypatch.setenv("LANGSMITH_PROJECT", "axiom-test")
+    monkeypatch.setenv("LANGSMITH_HIDE_INPUTS", "true")
+    monkeypatch.setenv("LANGSMITH_HIDE_OUTPUTS", "true")
+
+    configured = Settings.from_env()
+
+    assert configured.langsmith_configured is True
+    assert configured.langsmith_enabled is True
+    assert configured.langsmith_project == "axiom-test"
+    assert configured.langsmith_hide_inputs is True
+    assert configured.langsmith_hide_outputs is True
+    assert "test-langsmith-key" not in repr(configured)

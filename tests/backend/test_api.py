@@ -25,6 +25,14 @@ def test_versioned_api_returns_grounded_contract_and_never_echoes_credentials(
     assert health.status_code == 200
     assert health.json() == {"status": "ok", "version": "3.0.0"}
     assert status_before.status_code == 200
+    assert status_before.json()["observability"] == {
+        "provider": "langsmith",
+        "enabled": False,
+        "configured": False,
+        "project": "axiom-tech-v3",
+        "inputs_hidden": True,
+        "outputs_hidden": True,
+    }
     assert ingest.status_code == 200
     assert ingest.json()["inserted"] > 0
     assert query.status_code == 200

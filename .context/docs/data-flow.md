@@ -31,4 +31,6 @@ Internal evidence is retrieved from the configured vector store. The graph retur
 
 - Source files remain under `documentos/`; only normalized chunks and metadata enter the vector store.
 - API responses expose source metadata and operational trace events, never credentials or hidden reasoning.
+- When enabled, LangSmith receives graph/provider trace telemetry according to the configured masking flags; it is an external data boundary and is not part of the internal citation contract.
+- OCI Vault supplies runtime secrets to the cloud host; secret values never enter the source, image, API status, or trace metadata.
 - `.axiom_chroma/`, `.context/cache/`, and `.context/runtime/` are local runtime state and are not committed.

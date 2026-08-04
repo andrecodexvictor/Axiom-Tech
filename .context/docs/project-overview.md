@@ -14,4 +14,4 @@ Axiom Tech is a fictional technology company with an internal corporate knowledg
 
 The repository is a Python modular monolith: FastAPI is the boundary, LangGraph is the orchestration runtime, ChromaDB is the local vector bank, and NVIDIA NIM/Pinecone are optional hosted integrations. The supported corpus lives in `documentos/` and is normalized through the multi-format ingestion pipeline.
 
-Start with [README.md](../../README.md), the [V3 plan](../../docs/v3-plan.md), and the [API contract](../../docs/api.md).
+The Alura challenge evidence, OCI MCP deployment path, and LangSmith setup are documented in [challenge-checklist.md](../../docs/challenge-checklist.md), [oci-mcp-deployment.md](../../docs/oci-mcp-deployment.md), and [observability.md](../../docs/observability.md). Start with [README.md](../../README.md), the [V3 plan](../../docs/v3-plan.md), and the [API contract](../../docs/api.md).

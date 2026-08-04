@@ -30,3 +30,8 @@ delivery:
   persistentData: "ChromaDB volume"
   secretsPolicy: "runtime-only; never commit"
   localMode: "deterministic offline defaults"
+  cloudRuntime: "OCI Compute VM with Docker Compose"
+  cloudStorage: "OCI Block Volume mounted at /data/chroma"
+  cloudSecrets: "OCI Vault runtime secret bundle"
+  observability: "LangSmith tracing, opt-in with masked inputs and outputs"
+  imageRegistry: "OCI Container Registry, optional for the first VM proof"

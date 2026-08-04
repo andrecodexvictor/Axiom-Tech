@@ -43,4 +43,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: docker compose config --quiet
+      - name: Validate Compose configurations
+        run: |
+          docker compose config --quiet
+          PUBLIC_HOST=localhost docker compose -f docker-compose.yml -f docker-compose.oci.yml -f docker-compose.public.yml config --quiet
+          AXIOM_CORS_ORIGINS=https://example.invalid docker compose -f docker-compose.yml -f docker-compose.oci.yml -f docker-compose.gateway.yml config --quiet

@@ -8,7 +8,7 @@ and local Chroma plus deterministic embeddings remain the default.
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional, Tuple
 from urllib.parse import urlsplit
@@ -97,6 +97,13 @@ class Settings:
     web_allowlist: Tuple[str, ...] = ()
     web_timeout_seconds: float = 8.0
     web_max_response_bytes: int = 1_000_000
+    langsmith_tracing: bool = False
+    langsmith_api_key: str = field(default="", repr=False)
+    langsmith_endpoint: str = "https://api.smith.langchain.com"
+    langsmith_project: str = "axiom-tech-v3"
+    langsmith_workspace_id: str = field(default="", repr=False)
+    langsmith_hide_inputs: bool = True
+    langsmith_hide_outputs: bool = True
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -130,6 +137,23 @@ class Settings:
             web_max_response_bytes=min(
                 5_000_000, max(8_192, int(os.getenv("AXIOM_WEB_MAX_RESPONSE_BYTES", "1000000")))
             ),
+            langsmith_tracing=_as_bool(
+                os.getenv("LANGSMITH_TRACING") or os.getenv("LANGCHAIN_TRACING_V2"), default=False
+            ),
+            langsmith_api_key=os.getenv("LANGSMITH_API_KEY") or os.getenv("LANGCHAIN_API_KEY", ""),
+            langsmith_endpoint=_safe_https_url(
+                os.getenv("LANGSMITH_ENDPOINT") or os.getenv("LANGCHAIN_ENDPOINT"),
+                "https://api.smith.langchain.com",
+            ),
+            langsmith_project=(
+                os.getenv("LANGSMITH_PROJECT")
+                or os.getenv("LANGCHAIN_PROJECT")
+                or "axiom-tech-v3"
+            ).strip()
+            or "axiom-tech-v3",
+            langsmith_workspace_id=os.getenv("LANGSMITH_WORKSPACE_ID", "").strip(),
+            langsmith_hide_inputs=_as_bool(os.getenv("LANGSMITH_HIDE_INPUTS"), default=True),
+            langsmith_hide_outputs=_as_bool(os.getenv("LANGSMITH_HIDE_OUTPUTS"), default=True),
         )
 
     @property
@@ -147,6 +171,18 @@ class Settings:
     @property
     def web_search_configured(self) -> bool:
         return self.web_enabled and bool(self.serper_api_key) and bool(self.web_allowlist)
+
+    @property
+    def langsmith_configured(self) -> bool:
+        """Whether LangSmith has the non-public values required for tracing."""
+
+        return bool(self.langsmith_api_key and self.langsmith_project)
+
+    @property
+    def langsmith_enabled(self) -> bool:
+        """Whether tracing is explicitly enabled and can authenticate."""
+
+        return self.langsmith_tracing and self.langsmith_configured
 
 
 # Compatibility for existing CLI/import users.  New code receives Settings through

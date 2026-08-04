@@ -124,6 +124,14 @@ class KnowledgeService:
                 "configured": self.configuration.web_search_configured,
                 "allowlist_hosts": len(self.configuration.web_allowlist),
             },
+            "observability": {
+                "provider": "langsmith",
+                "enabled": self.configuration.langsmith_enabled,
+                "configured": self.configuration.langsmith_configured,
+                "project": self.configuration.langsmith_project,
+                "inputs_hidden": self.configuration.langsmith_hide_inputs,
+                "outputs_hidden": self.configuration.langsmith_hide_outputs,
+            },
         }
 
     def _resolve_ingest_target(self, requested: Optional[str]) -> Path:

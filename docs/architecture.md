@@ -55,6 +55,12 @@ flowchart TD
 
 The graph trace is response metadata, not hidden reasoning. It records node-level execution facts such as selected domain, evidence status, and rewrite count. It must not expose private chain-of-thought or secrets.
 
+## Cloud delivery and observability
+
+The first OCI delivery target is a Compute VM running the API/frontend Compose topology. ChromaDB is mounted on durable OCI storage. Runtime AI-provider and LangSmith credentials are supplied from OCI Vault and are never copied into the image or repository.
+
+LangGraph tracing is enabled only when `LANGSMITH_TRACING=true` and a runtime key/project are configured. The provider-specific OpenAI-compatible client is wrapped so a remote synthesis call appears as a nested LangSmith span. Trace inputs and outputs are hidden by default; the deployment owner must approve any payload capture.
+
 ## Evidence contract
 
 For corporate requests, the system must either return a source-backed answer or an explicit limitation. A citation record carries the source file, domain, file type, chunk identifier, path, and available page/slide/sheet locator. Citations are derived from retrieved metadata, never fabricated by a model.
@@ -67,6 +73,7 @@ External research is not an implicit fallback. It is an explicit route with doma
 - **Optional boundary:** Pinecone can be selected through the retrieval port, but the current adapter deliberately fails transparently until a deployment-specific production adapter is supplied.
 - **Default model behavior:** deterministic local routing/embedding/synthesis suitable for offline development and tests.
 - **Optional model behavior:** NVIDIA NIM only when enabled and credentials are available.
+- **Optional observability:** LangSmith for graph and provider traces, with sanitized status and masked payloads by default.
 
 ## Migration note
 

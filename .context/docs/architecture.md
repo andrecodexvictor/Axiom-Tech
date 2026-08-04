@@ -54,11 +54,19 @@ flowchart LR
 - [Frontend shell](../../frontend/src/App.tsx)
 - [Docker Compose](../../docker-compose.yml)
 
+## First cloud deployment
+
+The initial OCI target is a Compute VM running the API and frontend Compose services. ChromaDB is mounted at `/data/chroma` from durable OCI storage. OCI Vault supplies runtime provider and observability secrets; the deployment does not bake credentials into images. OCI Container Registry and a load balancer are follow-up hardening steps rather than prerequisites for the first challenge proof.
+
+LangGraph automatically participates in LangSmith tracing when the `LANGSMITH_*` runtime configuration is enabled. The NVIDIA-compatible client is wrapped for a nested provider span. Inputs and outputs are hidden by default and the API exposes only sanitized observability status.
+
 ## External Service Dependencies
 
 - ChromaDB persists locally under `.axiom_chroma/` and is the default runtime.
 - Pinecone is optional and must be configured before it is reported as active.
 - NVIDIA NIM is optional; deterministic synthesis remains available without credentials.
+- LangSmith is optional; tracing remains disabled without explicit runtime configuration.
+- OCI Compute, Block Volume, and Vault are deployment boundaries; they are not active until an operator provisions them.
 - Serper/web fetching is opt-in, restricted to an HTTPS hostname allowlist, and returns URL citations only.
 
 ## Key Decisions and Risks

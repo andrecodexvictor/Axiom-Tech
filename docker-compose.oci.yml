@@ -1,0 +1,6 @@
+# OCI Compute override.
+# Mount an OCI Block Volume on the host at /var/lib/axiom-data before starting.
+services:
+  api:
+    volumes:
+      - /var/lib/axiom-data/chroma:/data/chroma

@@ -57,11 +57,17 @@ class NvidiaGateway:
         )
         try:
             from openai import OpenAI
+            from langsmith.wrappers import wrap_openai
 
             client = OpenAI(
                 base_url=self.configuration.nvidia_base_url,
                 api_key=self.configuration.effective_nvidia_api_key,
             )
+            # LangGraph traces the graph automatically when LANGSMITH_TRACING is
+            # enabled. Wrapping this provider-specific client adds the actual
+            # model call as a nested LLM span without making LangSmith mandatory
+            # for deterministic local execution.
+            client = wrap_openai(client)
             response = client.chat.completions.create(
                 model=self.configuration.nvidia_model,
                 messages=[

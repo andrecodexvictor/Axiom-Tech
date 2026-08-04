@@ -11,7 +11,9 @@ scaffoldVersion: "2.0.0"
 # Security
 
 - Keep credentials in `.env` or deployment secrets; commit only `.env.example`.
+- For OCI, store AI-provider and LangSmith values in OCI Vault and grant the VM only the required secret-bundle read permission.
 - Never place source content, credentials, or model hidden reasoning in logs, status responses, screenshots, or citations.
+- LangSmith inputs and outputs are hidden by default. Review retention, residency, and access before enabling payload capture.
 - Validate ingestion paths against `AXIOM_DOCUMENTS_DIR` before reading files.
 - Web research is opt-in, HTTPS-only, allowlist-only, bounded by time/size, and rejects unsafe hosts/URLs.
 - Treat HR, legal, and incident answers as informational retrieval; route approvals and escalations to document owners.

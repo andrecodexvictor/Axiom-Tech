@@ -87,6 +87,15 @@ class WebResearchStatusResponse(BaseModel):
     allowlist_hosts: int
 
 
+class ObservabilityStatusResponse(BaseModel):
+    provider: str
+    enabled: bool
+    configured: bool
+    project: str
+    inputs_hidden: bool
+    outputs_hidden: bool
+
+
 class StatusResponse(BaseModel):
     status: str
     version: str
@@ -94,3 +103,4 @@ class StatusResponse(BaseModel):
     models: ModelStatusResponse
     documents_dir: str
     web_research: Optional[WebResearchStatusResponse] = None
+    observability: Optional[ObservabilityStatusResponse] = None
