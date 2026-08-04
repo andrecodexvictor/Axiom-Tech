@@ -1,0 +1,62 @@
+{
+  "version": 1,
+  "generatedAt": "2026-08-04T12:06:18.932Z",
+  "source": "manual",
+  "stack": {
+    "primaryLanguage": "python",
+    "languages": [
+      "python",
+      "typescript",
+      "javascript"
+    ],
+    "frameworks": [
+      "FastAPI",
+      "LangGraph",
+      "React",
+      "Vite"
+    ],
+    "buildTools": [
+      "docker",
+      "docker-compose"
+    ],
+    "testFrameworks": [
+      "pytest",
+      "TypeScript"
+    ],
+    "packageManager": "npm"
+  },
+  "sensors": [
+    {
+      "id": "backend-tests",
+      "name": "Backend tests",
+      "description": "Run the FastAPI, ingestion, Chroma, and LangGraph test suite",
+      "severity": "critical",
+      "command": "python -m pytest -q",
+      "script": "test"
+    },
+    {
+      "id": "frontend-check",
+      "name": "Frontend typecheck",
+      "description": "Typecheck the React/Vite employee console",
+      "severity": "critical",
+      "command": "npm --prefix frontend run check",
+      "script": "check"
+    },
+    {
+      "id": "frontend-build",
+      "name": "Frontend build",
+      "description": "Build the production React/Vite bundle",
+      "severity": "critical",
+      "command": "npm --prefix frontend run build",
+      "script": "build"
+    },
+    {
+      "id": "compose-config",
+      "name": "Compose validation",
+      "description": "Validate the local Docker Compose topology",
+      "severity": "warning",
+      "command": "docker compose config --quiet",
+      "script": "compose"
+    }
+  ]
+}
