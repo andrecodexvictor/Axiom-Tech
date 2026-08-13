@@ -133,7 +133,8 @@ jobs:
               "AXIOM_EMBEDDING_BASE_URL",
               "AXIOM_EMBEDDING_INPUT_TYPE",
           }
-          target, payload = map(pathlib.Path, sys.argv[1:])
+          deploy_root, payload = map(pathlib.Path, sys.argv[1:])
+          target = deploy_root / ".env"
           try:
               updates = dict(
                   line.split("=", 1)
