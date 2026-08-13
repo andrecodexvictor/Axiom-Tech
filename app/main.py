@@ -6,7 +6,7 @@ import argparse
 import logging
 from typing import Optional
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 
 from app import __version__
@@ -17,6 +17,7 @@ from app.schemas import (
     IngestResponse,
     QueryRequest,
     QueryResponse,
+    SourcePreviewResponse,
     SourcesResponse,
     StatusResponse,
 )
@@ -82,6 +83,20 @@ def create_app(
         except Exception as exc:
             logger.error("Source inventory failed (%s)", type(exc).__name__)
             raise HTTPException(status_code=503, detail="Source inventory is temporarily unavailable") from exc
+
+    @application.get("/api/v1/sources/preview", response_model=SourcePreviewResponse)
+    def source_preview(path: str = Query(..., min_length=1, max_length=4096)) -> dict:
+        try:
+            return application.state.knowledge_service.source_preview(path)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail="Source document was not found") from exc
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail="Source document is outside the configured corpus") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail="Source document cannot be previewed") from exc
+        except Exception as exc:
+            logger.error("Source preview failed (%s)", type(exc).__name__)
+            raise HTTPException(status_code=503, detail="Source preview is temporarily unavailable") from exc
 
     @application.post(
         "/api/v1/embeddings/rebuild",

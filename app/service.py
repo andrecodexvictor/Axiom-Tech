@@ -249,6 +249,52 @@ class KnowledgeService:
             "sources": records,
         }
 
+    def source_preview(self, requested_path: str, *, max_characters: int = 12_000) -> Dict[str, Any]:
+        """Extract a bounded, corpus-relative preview using the ingestion loader."""
+
+        if not requested_path or "\x00" in requested_path:
+            raise ValueError("A corpus-relative source path is required")
+        base = self.configuration.documents_dir.resolve()
+        source = (base / requested_path).resolve()
+        try:
+            relative = source.relative_to(base)
+        except ValueError as exc:
+            raise PermissionError("The source path must remain inside AXIOM_DOCUMENTS_DIR") from exc
+        if not source.is_file():
+            raise FileNotFoundError("Source document does not exist")
+        if source.suffix.lower() not in DocumentLoader.SUPPORTED_EXTENSIONS:
+            raise ValueError("Source document type is not supported")
+
+        extracted = DocumentLoader.load_file(source, source_root=base)
+        sections: List[str] = []
+        for document in extracted:
+            metadata = dict(document.get("metadata", {}) or {})
+            location = next(
+                (
+                    f"{label} {metadata[key]}"
+                    for key, label in (("page", "Página"), ("slide", "Slide"), ("sheet", "Planilha"))
+                    if metadata.get(key) is not None
+                ),
+                "",
+            )
+            content = str(document.get("content", "")).strip()
+            if content:
+                sections.append(f"{location}\n{content}" if location else content)
+        full_content = "\n\n".join(sections)
+        limit = max(1_000, min(int(max_characters), 20_000))
+        truncated = len(full_content) > limit
+        stat = source.stat()
+        return {
+            "path": relative.as_posix(),
+            "domain": source.parent.name,
+            "file_type": source.suffix.lower().lstrip("."),
+            "size_bytes": int(stat.st_size),
+            "modified_at": datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat(),
+            "content": full_content[:limit].rstrip(),
+            "extracted_sections": len(sections),
+            "truncated": truncated,
+        }
+
     @staticmethod
     def _optional_int(value: Any) -> Optional[int]:
         try:

@@ -13,6 +13,7 @@ This is the V3 integration contract for the FastAPI boundary. It is intentionall
 | POST | /api/v1/query | Run the grounded query workflow. |
 | POST | /api/v1/ingest | Explicitly index the configured internal corpus. |
 | GET | /api/v1/sources | List safe metadata and index state for each supported corpus file. |
+| GET | /api/v1/sources/preview?path=... | Return bounded text extracted from one corpus-relative document. |
 | POST | /api/v1/embeddings/rebuild | Recalculate every indexed vector using the active embedding provider. |
 
 ## Query
@@ -156,7 +157,10 @@ operation is the preferred UI action for an intentional full re-embedding.
 
 `GET /api/v1/sources` returns only relative paths, domain, file type, size,
 modification time, expected/indexed chunk counts, and a state of `indexed`,
-`pending`, `stale`, or `error`; it does not return document contents.
+`pending`, `stale`, or `error`. `GET /api/v1/sources/preview` accepts only a
+corpus-relative path, rejects traversal, uses the same multi-format extractor as
+ingestion, and returns at most 12,000 characters. Clients must treat the result
+as a convenience preview rather than the authoritative original document.
 
 ## Errors
 

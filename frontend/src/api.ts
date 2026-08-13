@@ -74,6 +74,17 @@ export interface SourcesResponse {
   sources: SourceStatus[];
 }
 
+export interface SourcePreview {
+  path: string;
+  domain: string;
+  file_type: string;
+  size_bytes: number;
+  modified_at: string;
+  content: string;
+  extracted_sections: number;
+  truncated: boolean;
+}
+
 export interface SystemStatus {
   status: 'ok' | string;
   version: string;
@@ -261,6 +272,14 @@ export const knowledgeApi = {
 
   sources(signal?: AbortSignal) {
     return request<SourcesResponse>('/api/v1/sources', { signal, cache: 'no-store' });
+  },
+
+  sourcePreview(path: string, signal?: AbortSignal) {
+    const query = new URLSearchParams({ path });
+    return request<SourcePreview>(`/api/v1/sources/preview?${query}`, {
+      signal,
+      cache: 'no-store',
+    });
   },
 
   status(signal?: AbortSignal) {

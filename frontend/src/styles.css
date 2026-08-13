@@ -1399,6 +1399,69 @@ svg {
   line-height: 1.45;
 }
 
+.inventory-preview-toggle {
+  display: inline-flex;
+  min-height: 30px;
+  margin: 8px 0 0 25px;
+  padding: 5px 0;
+  align-items: center;
+  gap: 6px;
+  color: var(--accent-strong);
+  background: transparent;
+  border: 0;
+  font: inherit;
+  font-size: 10px;
+  font-weight: 680;
+  cursor: pointer;
+}
+
+.inventory-preview-toggle:hover {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.inventory-preview-toggle:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 3px;
+}
+
+.inventory-preview {
+  margin: 8px 0 0 25px;
+  padding: 10px 11px;
+  color: var(--ink-soft);
+  background: var(--surface-muted);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.inventory-preview > p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.inventory-preview-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px 10px;
+  margin-bottom: 8px;
+  color: var(--muted);
+  font-size: 9px;
+  font-weight: 650;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.inventory-preview pre {
+  max-height: 260px;
+  margin: 0;
+  overflow: auto;
+  font: 400 10px/1.6 ui-monospace, SFMono-Regular, Consolas, monospace;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .inventory-status {
   display: inline-flex;
   min-height: 21px;

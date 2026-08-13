@@ -1,10 +1,13 @@
 import { memo, useEffect, useRef, useState } from 'react';
 import {
   ApiError,
+  isAbortError,
+  knowledgeApi,
   type Citation,
   type IngestResponse,
   type QueryResponse,
   type SourcesResponse,
+  type SourcePreview,
   type SystemStatus,
 } from './api';
 
@@ -617,6 +620,36 @@ export const SourceInventoryPanel = memo(function SourceInventoryPanel({
   onRefresh: () => void;
 }) {
   const data = state.data;
+  const [openPath, setOpenPath] = useState<string | null>(null);
+  const [preview, setPreview] = useState<{
+    phase: 'idle' | 'loading' | 'ready' | 'error';
+    data?: SourcePreview;
+    error?: string;
+  }>({ phase: 'idle' });
+  const previewAbortRef = useRef<AbortController | null>(null);
+
+  useEffect(() => () => previewAbortRef.current?.abort(), []);
+
+  const togglePreview = async (path: string) => {
+    previewAbortRef.current?.abort();
+    if (openPath === path) {
+      setOpenPath(null);
+      setPreview({ phase: 'idle' });
+      return;
+    }
+
+    const controller = new AbortController();
+    previewAbortRef.current = controller;
+    setOpenPath(path);
+    setPreview({ phase: 'loading' });
+    try {
+      const nextPreview = await knowledgeApi.sourcePreview(path, controller.signal);
+      if (!controller.signal.aborted) setPreview({ phase: 'ready', data: nextPreview });
+    } catch (error) {
+      if (controller.signal.aborted || isAbortError(error)) return;
+      setPreview({ phase: 'error', error: getErrorMessage(error) });
+    }
+  };
   return (
     <section className="source-inventory" aria-busy={state.phase === 'loading'} aria-labelledby="source-inventory-heading">
       <header className="panel-heading">
@@ -673,6 +706,30 @@ export const SourceInventoryPanel = memo(function SourceInventoryPanel({
                     <span>{formatCount(source.indexed_chunks)} / {formatCount(source.expected_chunks)} trechos</span>
                     {source.message && <span>{source.message}</span>}
                   </div>
+                  <button
+                    className="inventory-preview-toggle"
+                    type="button"
+                    aria-expanded={openPath === source.path}
+                    onClick={() => void togglePreview(source.path)}
+                  >
+                    <Icon name="book" size={14} />
+                    {openPath === source.path ? 'Fechar prévia' : 'Ver conteúdo extraído'}
+                  </button>
+                  {openPath === source.path && (
+                    <div className="inventory-preview" aria-live="polite">
+                      {preview.phase === 'loading' && <p>Extraindo uma prévia segura…</p>}
+                      {preview.phase === 'error' && <p role="alert">{preview.error}</p>}
+                      {preview.phase === 'ready' && preview.data && (
+                        <>
+                          <div className="inventory-preview-meta">
+                            <span>{formatCount(preview.data.extracted_sections)} seções extraídas</span>
+                            {preview.data.truncated && <span>Prévia limitada</span>}
+                          </div>
+                          <pre>{preview.data.content || 'Nenhum texto pôde ser extraído deste arquivo.'}</pre>
+                        </>
+                      )}
+                    </div>
+                  )}
                 </li>
               );
             })}
@@ -680,7 +737,7 @@ export const SourceInventoryPanel = memo(function SourceInventoryPanel({
         </>
       )}
 
-      <p className="inventory-note">A lista mostra somente metadados seguros; o conteúdo continua no corpus configurado do serviço.</p>
+      <p className="inventory-note">As prévias usam o mesmo extrator do índice e são limitadas; confirme informações críticas no documento original.</p>
     </section>
   );
 });

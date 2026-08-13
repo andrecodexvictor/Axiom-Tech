@@ -86,6 +86,17 @@ class SourcesResponse(BaseModel):
     sources: List[SourceStatusResponse]
 
 
+class SourcePreviewResponse(BaseModel):
+    path: str
+    domain: str
+    file_type: str
+    size_bytes: int
+    modified_at: str
+    content: str
+    extracted_sections: int
+    truncated: bool
+
+
 class HealthResponse(BaseModel):
     status: str
     version: str

@@ -128,3 +128,27 @@ def test_source_inventory_marks_changed_files_without_reparsing_them(
     changed = next(item for item in inventory["sources"] if item["path"] == "rh/home_office.md")
     assert changed["status"] == "stale"
     assert changed["indexed_chunks"] > 0
+
+
+def test_source_preview_extracts_content_and_rejects_traversal(
+    axiom_settings, sample_documents
+) -> None:
+    application = create_app(
+        service=create_knowledge_service(axiom_settings), configuration=axiom_settings
+    )
+
+    with TestClient(application) as client:
+        preview = client.get(
+            "/api/v1/sources/preview", params={"path": "rh/home_office.md"}
+        )
+        traversal = client.get(
+            "/api/v1/sources/preview", params={"path": "../outside.md"}
+        )
+
+    assert preview.status_code == 200
+    body = preview.json()
+    assert body["path"] == "rh/home_office.md"
+    assert body["content"]
+    assert body["extracted_sections"] == 1
+    assert str(axiom_settings.documents_dir.parent) not in json.dumps(body)
+    assert traversal.status_code == 403
