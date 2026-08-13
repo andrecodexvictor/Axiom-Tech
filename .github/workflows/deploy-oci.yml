@@ -82,6 +82,10 @@ jobs:
           REMOTE
 
       - name: Verify public URL
+        # The test VM currently exposes HTTP directly. Its OCI network rule
+        # is not public yet, so the remote health check above is authoritative
+        # for HTTP test deployments; HTTPS deployments retain the public check.
+        if: ${{ startsWith(env.PUBLIC_URL, 'https://') }}
         shell: bash
         run: |
           set -eu
