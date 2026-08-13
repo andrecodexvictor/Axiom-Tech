@@ -71,6 +71,98 @@ jobs:
           printf '%s\n' "$SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
           chmod 600 "$HOME/.ssh/axiom-oci" "$HOME/.ssh/known_hosts"
 
+      - name: Configure production AI providers
+        env:
+          RUNTIME_NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
+          RUNTIME_EMBEDDING_API_KEY: ${{ secrets.AXIOM_EMBEDDING_API_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$RUNTIME_NVIDIA_API_KEY"
+          test -n "$RUNTIME_EMBEDDING_API_KEY"
+
+          local_settings="$RUNNER_TEMP/axiom-ai.env"
+          remote_settings="/tmp/axiom-ai-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.env"
+          trap 'rm -f "$local_settings"' EXIT
+          umask 077
+          {
+            printf 'NVIDIA_API_KEY=%s\n' "$RUNTIME_NVIDIA_API_KEY"
+            printf 'AXIOM_EMBEDDING_API_KEY=%s\n' "$RUNTIME_EMBEDDING_API_KEY"
+            printf '%s\n' \
+              'AXIOM_NVIDIA_ENABLED=true' \
+              'AXIOM_LLM_PROVIDER=nvidia' \
+              'AXIOM_LLM_FALLBACK=deterministic' \
+              'NVIDIA_MODEL=meta/muse-glimmer-30b' \
+              'AXIOM_EMBEDDING_PROVIDER=openai' \
+              'AXIOM_EMBEDDING_MODEL=nvidia/llama-nemotron-embed-1b-v2' \
+              'AXIOM_EMBEDDING_DIMENSIONS=384' \
+              'AXIOM_EMBEDDING_BASE_URL=https://integrate.api.nvidia.com/v1' \
+              'AXIOM_EMBEDDING_INPUT_TYPE=auto'
+          } > "$local_settings"
+
+          scp \
+            -i "$HOME/.ssh/axiom-oci" \
+            -o BatchMode=yes \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            "$local_settings" \
+            "$OCI_DEPLOY_USER@$OCI_DEPLOY_HOST:$remote_settings"
+
+          printf -v remote_args '%q ' "$OCI_DEPLOY_PATH" "$remote_settings"
+          ssh \
+            -i "$HOME/.ssh/axiom-oci" \
+            -o BatchMode=yes \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            "$OCI_DEPLOY_USER@$OCI_DEPLOY_HOST" \
+            "python3 - $remote_args" <<'PY'
+          import os
+          import pathlib
+          import sys
+
+          allowed = {
+              "NVIDIA_API_KEY",
+              "AXIOM_EMBEDDING_API_KEY",
+              "AXIOM_NVIDIA_ENABLED",
+              "AXIOM_LLM_PROVIDER",
+              "AXIOM_LLM_FALLBACK",
+              "NVIDIA_MODEL",
+              "AXIOM_EMBEDDING_PROVIDER",
+              "AXIOM_EMBEDDING_MODEL",
+              "AXIOM_EMBEDDING_DIMENSIONS",
+              "AXIOM_EMBEDDING_BASE_URL",
+              "AXIOM_EMBEDDING_INPUT_TYPE",
+          }
+          target, payload = map(pathlib.Path, sys.argv[1:])
+          try:
+              updates = dict(
+                  line.split("=", 1)
+                  for line in payload.read_text().splitlines()
+                  if line
+              )
+              if set(updates) != allowed or not all(updates.values()):
+                  raise SystemExit("Invalid runtime AI settings")
+              existing = target.read_text().splitlines() if target.exists() else []
+              output, written = [], set()
+              for line in existing:
+                  key = line.split("=", 1)[0].strip() if "=" in line else ""
+                  if key in updates:
+                      if key not in written:
+                          output.append(f"{key}={updates[key]}")
+                          written.add(key)
+                  else:
+                      output.append(line)
+              output.extend(
+                  f"{key}={updates[key]}" for key in sorted(allowed - written)
+              )
+              replacement = target.with_name(target.name + ".next")
+              replacement.write_text("\n".join(output) + "\n")
+              os.chmod(replacement, 0o600)
+              os.replace(replacement, target)
+          finally:
+              payload.unlink(missing_ok=True)
+          PY
+
       - name: Authenticate VM to GHCR
         shell: bash
         run: |
