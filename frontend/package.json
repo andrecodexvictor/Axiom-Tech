@@ -3,6 +3,10 @@
   "version": "3.0.0",
   "private": true,
   "type": "module",
+  "packageManager": "pnpm@9.15.4",
+  "engines": {
+    "node": ">=22"
+  },
   "description": "Axiom Tech V3 corporate knowledge workspace",
   "scripts": {
     "dev": "vite",
