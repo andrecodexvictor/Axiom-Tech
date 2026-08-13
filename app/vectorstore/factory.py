@@ -35,5 +35,8 @@ def create_vector_store(configuration: Settings) -> VectorStorePort:
             embedding,
             retrieval_policy,
         )
-    except ChromaUnavailableError as exc:
-        return InMemoryVectorStore(embedding, retrieval_policy, str(exc))
+    except ChromaUnavailableError:
+        # Keep the public status stable and sanitized.  The underlying import
+        # or platform exception can contain local paths and must not cross the
+        # API boundary.
+        return InMemoryVectorStore(embedding, retrieval_policy, "chroma_unavailable")

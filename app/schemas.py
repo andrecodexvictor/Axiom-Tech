@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import List, Literal, Optional
+from typing import Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -15,6 +15,7 @@ class QueryRequest(BaseModel):
 
 class IngestRequest(BaseModel):
     path: Optional[str] = Field(None, max_length=4096)
+    force: bool = False
 
 
 class CitationResponse(BaseModel):
@@ -46,6 +47,8 @@ class QueryResponse(BaseModel):
     trace: List[TraceResponse]
     rewrite_count: int
     grounded: bool
+    duration_ms: float = 0.0
+    timings_ms: Dict[str, float] = Field(default_factory=dict)
 
 
 class IngestFileResponse(BaseModel):
@@ -64,6 +67,25 @@ class IngestResponse(BaseModel):
     files: List[IngestFileResponse]
 
 
+class SourceStatusResponse(BaseModel):
+    path: str
+    domain: str
+    file_type: str
+    size_bytes: int
+    modified_at: str
+    indexed_chunks: int
+    expected_chunks: int
+    status: str
+    message: Optional[str] = None
+
+
+class SourcesResponse(BaseModel):
+    total: int
+    indexed: int
+    pending: int
+    sources: List[SourceStatusResponse]
+
+
 class HealthResponse(BaseModel):
     status: str
     version: str
@@ -74,6 +96,9 @@ class VectorStoreStatusResponse(BaseModel):
     collection: str
     physical_collection: Optional[str] = None
     document_count: int
+    source_count: Optional[int] = None
+    ready: bool = False
+    reason: Optional[str] = None
     embedding: Optional["EmbeddingStatusResponse"] = None
     retrieval: Optional["RetrievalStatusResponse"] = None
 

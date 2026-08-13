@@ -137,6 +137,21 @@ def test_local_answers_follow_the_question_language(axiom_settings, sample_docum
     assert "desativada" in external["answer"].lower()
 
 
+def test_portuguese_lgpd_question_retrieves_english_policy(axiom_settings, sample_documents) -> None:
+    service = create_knowledge_service(axiom_settings)
+    service.ingest()
+
+    answer = service.query(
+        "Quais são os direitos dos titulares segundo a política de LGPD?",
+        domain="juridico",
+        top_k=6,
+    )
+
+    assert answer["grounded"] is True
+    assert answer["citations"]
+    assert answer["citations"][0]["source"] == "privacy.md"
+
+
 def test_web_url_validation_enforces_https_allowlist_and_ssrf_guards(axiom_settings) -> None:
     configured = replace(
         axiom_settings,

@@ -29,7 +29,7 @@ class InMemoryVectorStore(VectorStorePort):
         self.retrieval_policy = retrieval_policy
         self._chunks: Dict[str, Dict[str, Any]] = {}
 
-    def upsert(self, chunks: List[Dict[str, Any]]) -> UpsertResult:
+    def upsert(self, chunks: List[Dict[str, Any]], *, force: bool = False) -> UpsertResult:
         normalized = [self._normalize_chunk(chunk) for chunk in chunks]
         inserted = updated = unchanged = 0
         source_to_current: Dict[str, set[str]] = {}
@@ -43,7 +43,7 @@ class InMemoryVectorStore(VectorStorePort):
             if prior is None:
                 inserted += 1
                 to_write.append(chunk)
-            elif prior["content"] == content and prior["metadata"] == metadata:
+            elif not force and prior["content"] == content and prior["metadata"] == metadata:
                 unchanged += 1
             else:
                 updated += 1
@@ -70,6 +70,35 @@ class InMemoryVectorStore(VectorStorePort):
                     del self._chunks[identifier]
                 removed += len(stale)
         return UpsertResult(len(normalized), inserted, updated, unchanged, removed)
+
+    def source_inventory(self) -> List[Dict[str, Any]]:
+        grouped: Dict[str, Dict[str, Any]] = {}
+        for value in self._chunks.values():
+            metadata = value["metadata"]
+            source_key = str(metadata.get("source_key", ""))
+            if not source_key:
+                continue
+            item = grouped.setdefault(
+                source_key,
+                {
+                    "source_key": source_key,
+                    "source": str(metadata.get("source", source_key)),
+                    "domain": str(metadata.get("domain", "unknown")),
+                    "file_type": str(metadata.get("file_type", "")),
+                    "size_bytes": metadata.get("size_bytes"),
+                    "modified_ns": metadata.get("modified_ns"),
+                    "chunks": 0,
+                    "document_hashes": set(),
+                },
+            )
+            item["chunks"] += 1
+            document_hash = str(metadata.get("document_hash", ""))
+            if document_hash:
+                item["document_hashes"].add(document_hash)
+        return [
+            {**item, "document_hashes": sorted(item["document_hashes"])}
+            for item in grouped.values()
+        ]
 
     def search(
         self, query: str, domain: Optional[str] = None, limit: int = 4
@@ -107,11 +136,19 @@ class InMemoryVectorStore(VectorStorePort):
         )
 
     def status(self) -> Dict[str, Any]:
+        source_count = len(
+            {
+                str(value["metadata"].get("source_key", ""))
+                for value in self._chunks.values()
+                if value["metadata"].get("source_key")
+            }
+        )
         return {
             "backend": self.backend_name,
             "collection": "in-memory",
             "physical_collection": "in-memory",
             "document_count": len(self._chunks),
+            "source_count": source_count,
             "reason": self.reason,
             "embedding": self.embedding.status(),
             "retrieval": self.retrieval_policy.status(),

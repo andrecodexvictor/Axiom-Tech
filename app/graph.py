@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from contextlib import ExitStack, contextmanager
 import logging
+import threading
+import time
 from typing import Any, Dict, List, Optional
 
 from app.agents.grounding import (
@@ -58,6 +60,10 @@ class AxiomAgentGraph:
         self.vector_store = vector_store
         self.model_gateway = model_gateway
         self.web_research_agent = web_research_agent or WebResearchAgent(model_gateway.configuration)
+        self._semantic_grounding = self._compute_semantic_grounding_allowed()
+        self._langsmith_client: Any = None
+        self._langsmith_unavailable = False
+        self._langsmith_lock = threading.Lock()
         self.graph = self._build_graph()
 
     def _build_graph(self) -> Any:
@@ -94,6 +100,7 @@ class AxiomAgentGraph:
     def run(
         self, user_question: str, domain: Optional[str] = None, top_k: int = 4
     ) -> Dict[str, Any]:
+        started = time.perf_counter()
         question = user_question.strip()
         if not question:
             raise ValueError("question must not be empty")
@@ -110,6 +117,7 @@ class AxiomAgentGraph:
             "sources": [],
             "citations": [],
             "messages": [],
+            "timings_ms": {},
             # StateGraph carries the requested limit as ordinary state; it is not
             # exposed as part of the public answer contract.
             "top_k": requested_limit,
@@ -130,6 +138,10 @@ class AxiomAgentGraph:
         result.setdefault("next_agent", result.get("specialist", "engineering"))
         result.setdefault("final_answer", result.get("answer", ""))
         result.setdefault("sources", [citation["source"] for citation in result.get("citations", [])])
+        timings = dict(result.get("timings_ms", {}) or {})
+        timings["total_ms"] = round((time.perf_counter() - started) * 1000, 1)
+        result["timings_ms"] = timings
+        result["duration_ms"] = timings["total_ms"]
         return result
 
     def _supervisor(self, state: AgentState) -> Dict[str, Any]:
@@ -149,8 +161,11 @@ class AxiomAgentGraph:
         return "web" if state.get("domain") == "web" else "internal"
 
     def _web_research(self, state: AgentState) -> Dict[str, Any]:
+        started = time.perf_counter()
         result = self.web_research_agent.research(state["question"], limit=int(state.get("top_k", 4)))
         citations = list(result.citations)
+        timings = self._timings(state)
+        timings["web_ms"] = round((time.perf_counter() - started) * 1000, 1)
         return {
             "answer": result.answer,
             "final_answer": result.answer,
@@ -158,15 +173,22 @@ class AxiomAgentGraph:
             "citations": citations,
             "sources": list(dict.fromkeys(citation["source"] for citation in citations)),
             "trace": list(state.get("trace", [])) + list(result.trace),
+            "timings_ms": timings,
         }
 
     def _retrieval(self, state: AgentState) -> Dict[str, Any]:
+        started = time.perf_counter()
         query = state["active_question"]
         limit = int(state.get("top_k", 4))
         domain = state.get("retrieval_domain", state.get("domain"))
         documents = self.vector_store.search(query=query, domain=domain, limit=limit)
         scope = domain or "all-domains"
         step = int(state.get("rewrite_count", 0)) + 1
+        timings = self._timings(state)
+        timings["retrieval_ms"] = round(
+            float(timings.get("retrieval_ms", 0.0)) + (time.perf_counter() - started) * 1000,
+            1,
+        )
         return {
             "retrieved_docs": documents,
             "trace": self._trace(
@@ -177,6 +199,7 @@ class AxiomAgentGraph:
                     step, MAX_REWRITES + 1, len(documents), scope
                 ),
             ),
+            "timings_ms": timings,
         }
 
     def _specialist(self, state: AgentState) -> Dict[str, Any]:
@@ -245,8 +268,11 @@ class AxiomAgentGraph:
         }
 
     def _synthesize(self, state: AgentState) -> Dict[str, Any]:
+        started = time.perf_counter()
         evidence = list(state.get("retrieved_docs", []))
         synthesis = self.model_gateway.synthesize(state["question"], evidence)
+        timings = self._timings(state)
+        timings["synthesis_ms"] = round((time.perf_counter() - started) * 1000, 1)
         return {
             "answer": synthesis.answer,
             "final_answer": synthesis.answer,
@@ -255,6 +281,7 @@ class AxiomAgentGraph:
             "trace": self._trace(
                 state, "synthesize", synthesis.mode, "Produced an answer from graded internal evidence"
             ),
+            "timings_ms": timings,
         }
 
     def _fallback(self, state: AgentState) -> Dict[str, Any]:
@@ -313,12 +340,19 @@ class AxiomAgentGraph:
         }
 
     def _semantic_grounding_allowed(self) -> bool:
+        return self._semantic_grounding
+
+    def _compute_semantic_grounding_allowed(self) -> bool:
         embedding = dict(self.vector_store.status().get("embedding", {}) or {})
         return bool(
             embedding.get("configured")
             and embedding.get("mode") == "remote"
             and embedding.get("provider") not in {"", "deterministic", "disabled"}
         )
+
+    @staticmethod
+    def _timings(state: AgentState) -> Dict[str, float]:
+        return dict(state.get("timings_ms", {}) or {})
 
     @contextmanager
     def _langsmith_scope(self):
@@ -339,7 +373,15 @@ class AxiomAgentGraph:
                 client_options["hide_inputs"] = lambda _inputs: {}
             if configuration.langsmith_hide_outputs:
                 client_options["hide_outputs"] = lambda _outputs: {}
-            client = Client(**client_options)
+            with self._langsmith_lock:
+                unavailable = self._langsmith_unavailable
+                if not unavailable:
+                    if self._langsmith_client is None:
+                        self._langsmith_client = Client(**client_options)
+                    client = self._langsmith_client
+            if unavailable:
+                yield
+                return
             context = tracing_context(
                 enabled=True,
                 client=client,
@@ -348,6 +390,7 @@ class AxiomAgentGraph:
             stack = ExitStack()
             stack.enter_context(context)
         except Exception as exc:
+            self._langsmith_unavailable = True
             logger.warning("LangSmith tracing unavailable (%s)", type(exc).__name__)
             yield
             return

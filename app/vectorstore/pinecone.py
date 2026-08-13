@@ -19,7 +19,8 @@ class PineconeVectorStore(VectorStorePort):
     def __init__(self, message: str = "Pinecone adapter is not configured for this deployment") -> None:
         self.message = message
 
-    def upsert(self, chunks: List[Dict[str, Any]]) -> UpsertResult:
+    def upsert(self, chunks: List[Dict[str, Any]], *, force: bool = False) -> UpsertResult:
+        del chunks, force
         raise RuntimeError(self.message)
 
     def search(
@@ -28,4 +29,13 @@ class PineconeVectorStore(VectorStorePort):
         raise RuntimeError(self.message)
 
     def status(self) -> Dict[str, Any]:
-        return {"backend": self.backend_name, "collection": "", "document_count": 0, "reason": self.message}
+        return {
+            "backend": self.backend_name,
+            "collection": "",
+            "document_count": 0,
+            "source_count": 0,
+            "reason": self.message,
+        }
+
+    def source_inventory(self) -> List[Dict[str, Any]]:
+        return []

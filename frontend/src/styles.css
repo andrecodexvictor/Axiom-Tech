@@ -1059,7 +1059,8 @@ svg {
 
 .evidence-panel,
 .evidence-guide,
-.status-panel {
+.status-panel,
+.source-inventory {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
@@ -1323,6 +1324,149 @@ svg {
   scroll-margin-top: 84px;
 }
 
+.source-inventory {
+  overflow: hidden;
+  scroll-margin-top: 84px;
+}
+
+.inventory-summary {
+  display: grid;
+  gap: 2px;
+  padding: 13px 17px;
+  color: var(--ink-soft);
+  background: var(--surface-muted);
+  border-bottom: 1px solid var(--border);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.inventory-summary strong {
+  color: var(--ink);
+  font-size: 12px;
+}
+
+.inventory-summary span,
+.inventory-note {
+  color: var(--muted);
+}
+
+.inventory-list {
+  max-height: 390px;
+  margin: 0;
+  padding: 0;
+  overflow: auto;
+  list-style: none;
+}
+
+.inventory-item {
+  padding: 12px 17px;
+}
+
+.inventory-item + .inventory-item {
+  border-top: 1px solid var(--border);
+}
+
+.inventory-item-heading {
+  display: grid;
+  grid-template-columns: 17px minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: start;
+}
+
+.inventory-item-heading > svg {
+  margin-top: 2px;
+  color: var(--accent-strong);
+}
+
+.inventory-item-heading > div {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.inventory-item-heading strong {
+  overflow: hidden;
+  color: var(--ink-soft);
+  font: 650 11px/1.4 ui-monospace, SFMono-Regular, Consolas, monospace;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.inventory-item-heading span:not(.inventory-status),
+.inventory-item-meta {
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.inventory-status {
+  display: inline-flex;
+  min-height: 21px;
+  align-items: center;
+  padding: 3px 6px;
+  border-radius: 999px;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.inventory-status--indexed {
+  color: var(--success);
+  background: var(--success-soft);
+}
+
+.inventory-status--pending,
+.inventory-status--stale {
+  color: var(--warning);
+  background: var(--warning-soft);
+}
+
+.inventory-status--error {
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+
+.inventory-item-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  margin: 7px 0 0 25px;
+}
+
+.inventory-note {
+  margin: 0;
+  padding: 11px 17px 13px;
+  border-top: 1px solid var(--border);
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.inventory-loading {
+  display: grid;
+  gap: 11px;
+  padding: 18px 17px;
+}
+
+.inventory-error {
+  padding: 14px 17px;
+  color: var(--danger);
+  background: var(--danger-soft);
+  border-bottom: 1px solid var(--border);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.inventory-error p {
+  margin: 0;
+}
+
+.inventory-error .text-action {
+  min-height: 25px;
+  color: var(--danger);
+  font-size: 11px;
+}
+
 .status-panel .panel-heading {
   align-items: center;
 }
@@ -1387,6 +1531,27 @@ svg {
   border-top: 1px solid var(--border);
 }
 
+.status-note {
+  display: flex;
+  gap: 7px;
+  margin: 12px 17px 0;
+  padding: 9px 10px;
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.status-note svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
+}
+
+.status-note--warning {
+  color: var(--warning);
+  background: var(--warning-soft);
+  border: 1px solid color-mix(in oklch, var(--warning) 30%, var(--border));
+  border-radius: var(--radius-sm);
+}
+
 .system-details div {
   display: flex;
   min-width: 0;
@@ -1449,6 +1614,13 @@ svg {
   color: var(--muted);
   font-size: 11px;
   line-height: 1.5;
+}
+
+.maintenance-hint {
+  margin: 13px 0 8px;
+  color: var(--subtle);
+  font-size: 10px;
+  line-height: 1.45;
 }
 
 .index-feedback {
@@ -1551,7 +1723,8 @@ svg {
 
   .evidence-panel,
   .evidence-guide,
-  .status-panel {
+  .status-panel,
+  .source-inventory {
     min-width: 0;
   }
 }

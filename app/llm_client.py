@@ -11,9 +11,17 @@ from typing import Any, Callable, List, Optional, Sequence
 
 from app.config import ModelRouteConfig, Settings, settings
 from app.vectorstore.port import RetrievedChunk
+from app.vectorstore.retrieval import tokenize
 
 
 logger = logging.getLogger(__name__)
+
+MAX_EVIDENCE_CHARS = 800
+MAX_CONTEXT_CHARS = 9_000
+# The console needs a concise grounded answer, not a long generation.  A
+# smaller cap materially reduces tail latency on the 70B gateway route while
+# leaving enough room for a short explanation and bullet list.
+MAX_SYNTHESIS_TOKENS = 256
 
 
 class ModelGatewayError(RuntimeError):
@@ -34,6 +42,10 @@ class ModelProviderUnavailable(ModelGatewayError):
 
 class ModelProviderResponseError(ModelGatewayError):
     """The provider returned a successful but unusable response."""
+
+
+class ModelProviderEmptyResponse(ModelProviderResponseError):
+    """The provider used its completion budget without producing an answer."""
 
 
 @dataclass(frozen=True)
@@ -71,6 +83,8 @@ class ModelGateway:
     ) -> None:
         self.configuration = configuration
         self._client_factory = client_factory or self._create_client
+        self._reuse_clients = client_factory is None
+        self._clients: dict[str, Any] = {}
         self._clock = clock
         self._circuits = {
             route.name: _CircuitState() for route in configuration.model_routes if route.remote
@@ -98,6 +112,19 @@ class ModelGateway:
                 continue
             try:
                 answer = self._remote_synthesize(route, question, evidence)
+            except ModelProviderEmptyResponse as exc:
+                # A reasoning model can legally return HTTP 200 with no final
+                # content when its reasoning budget is exhausted.  Treat that
+                # shape as a transient route failure so grounded local
+                # synthesis remains available instead of returning a 503.
+                transient_failure = True
+                self._record_transient_failure(route.name)
+                logger.warning(
+                    "Model route %s returned no final content (%s)",
+                    route.name,
+                    type(exc).__name__,
+                )
+                continue
             except Exception as exc:
                 if self._is_transient(exc):
                     transient_failure = True
@@ -173,25 +200,43 @@ class ModelGateway:
         question: str,
         evidence: Sequence[RetrievedChunk],
     ) -> str:
-        context = "\n\n".join(
-            "[{0}] {1}".format(item.metadata.get("source", "internal document"), item.content)
-            for item in evidence
-        )
-        client = self._client_factory(
-            route,
-            self.configuration.llm_timeout_seconds,
-            self.configuration.llm_max_retries,
-        )
-        response = client.chat.completions.create(
-            model=route.model,
-            messages=[
+        context_parts: List[str] = []
+        context_size = 0
+        prompt_evidence = evidence
+        if "muse-glimmer-30b" in str(route.model or "").lower():
+            # Reasoning-heavy routes perform better with the two strongest
+            # chunks than with a long mixed context; citations remain complete
+            # in the API because this only limits synthesis input.
+            query_terms = {term for term in tokenize(question) if len(term) > 2}
+            selected = []
+            for item in evidence:
+                compact = self._compact_evidence(question, str(item.content))
+                overlap = len(query_terms & set(tokenize(compact)))
+                if selected and overlap == 0:
+                    continue
+                selected.append(item)
+                if len(selected) == 2:
+                    break
+            prompt_evidence = selected or evidence[:1]
+        for item in prompt_evidence:
+            source = str(item.metadata.get("source", "internal document"))
+            content = self._compact_evidence(question, str(item.content))
+            part = "[{0}] {1}".format(source, content)
+            if context_parts and context_size + len(part) > MAX_CONTEXT_CHARS:
+                break
+            context_parts.append(part)
+            context_size += len(part)
+        context = "\n\n".join(context_parts)
+        client = self._get_client(route)
+        request: dict[str, Any] = {
+            "model": route.model,
+            "messages": [
                 {
                     "role": "system",
                     "content": (
-                        "Answer only from the supplied internal evidence. "
-                        "If evidence does not establish a fact, say that it is not established. "
-                        "Use the same language as the user's question. "
-                        "Be concise and do not invent citations."
+                        "Use only the supplied internal evidence. "
+                        "Answer in the user's language. "
+                        "If it is insufficient, say so. Be concise and do not invent citations."
                     ),
                 },
                 {
@@ -199,18 +244,122 @@ class ModelGateway:
                     "content": "Question: {0}\n\nEvidence:\n{1}".format(question, context),
                 },
             ],
-            temperature=0,
-            max_tokens=700,
-        )
+            "temperature": 0,
+            "max_tokens": self._max_tokens(route, len(context_parts)),
+        }
+        extra_body = self._extra_body(route)
+        if extra_body:
+            request["extra_body"] = extra_body
+        response = client.chat.completions.create(**request)
         try:
-            content = response.choices[0].message.content
+            message = response.choices[0].message
+            content = message.content
         except (AttributeError, IndexError, TypeError) as exc:
             raise ModelProviderResponseError(
                 "The model provider returned an invalid response"
             ) from exc
         if not isinstance(content, str) or not content.strip():
-            raise ModelProviderResponseError("The model provider returned an empty response")
+            raise ModelProviderEmptyResponse("The model provider returned an empty response")
         return content.strip()
+
+    @staticmethod
+    def _max_tokens(route: ModelRouteConfig, evidence_count: int = 1) -> int:
+        # Muse Glimmer emits a separate reasoning stream before final content;
+        # 256 tokens is often consumed before it reaches the answer.  Keep the
+        # normal cap small and give this known route enough room to finish.
+        if "muse-glimmer-30b" in str(route.model or "").lower():
+            return 384 if evidence_count <= 1 else 512
+        return MAX_SYNTHESIS_TOKENS
+
+    @staticmethod
+    def _extra_body(route: ModelRouteConfig) -> dict[str, Any]:
+        """Return safe provider extensions for known reasoning model shapes.
+
+        Muse Glimmer exposes its internal reasoning budget through a provider
+        chat-template option.  Without a low reasoning setting, short RAG
+        requests can spend the entire completion budget in ``reasoning_content``
+        and return no user-facing ``content``.  The reasoning field is never
+        used as the answer or exposed in the API.
+        """
+
+        model = str(route.model or "").lower()
+        if "muse-glimmer-30b" in model:
+            return {"chat_template_kwargs": {"reasoning_strength": "low"}}
+        return {}
+
+    @staticmethod
+    def _compact_evidence(question: str, content: str) -> str:
+        """Send the most query-relevant source lines to a remote synthesizer.
+
+        Retrieval already selected the chunk.  This second, deterministic
+        compression keeps large CSV/Markdown chunks from consuming the model's
+        reasoning budget while preserving verbatim evidence and its source
+        citation.  It is not a summary and never adds text.
+        """
+
+        raw = content.strip()
+        normalized = re.sub(r"\s+", " ", raw)
+        if len(raw) <= MAX_EVIDENCE_CHARS:
+            return normalized
+        query_terms = {term for term in tokenize(question) if len(term) > 2}
+        segments = [
+            re.sub(r"\s+", " ", segment).strip()
+            for segment in re.split(r"\n+|(?<=[.!?])\s+", content)
+            if segment.strip()
+        ]
+        if not segments:
+            return normalized[:MAX_EVIDENCE_CHARS]
+        overlap_by_index = {
+            index: len(query_terms & set(tokenize(segment)))
+            for index, segment in enumerate(segments)
+        }
+        best_index = max(
+            overlap_by_index,
+            key=lambda index: (overlap_by_index[index], -index),
+        )
+        # A Markdown heading often introduces the exact list or policy section
+        # needed by the question.  Preserve that heading and its following
+        # section instead of returning only the heading line.
+        if overlap_by_index[best_index] > 0 and re.match(r"^#{1,6}\s", segments[best_index]):
+            section_end = len(segments)
+            for index in range(best_index + 1, len(segments)):
+                if re.match(r"^#{1,6}\s", segments[index]):
+                    section_end = index
+                    break
+            ranked = [(index, segments[index]) for index in range(best_index, section_end)]
+        else:
+            ranked = sorted(
+                enumerate(segments),
+                key=lambda pair: (-overlap_by_index[pair[0]], pair[0]),
+            )
+        chosen: List[tuple[int, str]] = []
+        size = 0
+        for index, segment in ranked:
+            overlap = len(query_terms & set(tokenize(segment)))
+            if chosen and overlap == 0 and not re.match(r"^#{1,6}\s", segments[best_index]):
+                continue
+            addition = len(segment) + (1 if chosen else 0)
+            if size + addition > MAX_EVIDENCE_CHARS:
+                continue
+            chosen.append((index, segment))
+            size += addition
+            if size >= MAX_EVIDENCE_CHARS:
+                break
+        if not chosen:
+            return normalized[:MAX_EVIDENCE_CHARS]
+        return " ".join(segment for _, segment in sorted(chosen))
+
+    def _get_client(self, route: ModelRouteConfig) -> Any:
+        if self._reuse_clients and route.name in self._clients:
+            return self._clients[route.name]
+        client = self._client_factory(
+            route,
+            self.configuration.llm_timeout_seconds,
+            self.configuration.llm_max_retries,
+        )
+        if self._reuse_clients:
+            self._clients[route.name] = client
+        return client
 
     @staticmethod
     def _is_transient(exc: Exception) -> bool:
@@ -282,11 +431,12 @@ class ModelGateway:
                 if portuguese
                 else "I could not find internal evidence that answers this question."
             )
-        query_terms = set(re.findall(r"[\wÀ-ÿ][\wÀ-ÿ._/-]*", question.lower(), flags=re.UNICODE))
+        query_terms = set(tokenize(question))
         excerpts: List[str] = []
         seen = set()
         for item in evidence:
-            excerpt = ModelGateway._best_sentence(item.content, query_terms)
+            compact_content = ModelGateway._compact_evidence(question, item.content)
+            excerpt = ModelGateway._best_sentence(compact_content, query_terms)
             normalized = re.sub(r"\s+", " ", excerpt).strip()
             if not normalized or normalized.lower() in seen:
                 continue
@@ -323,18 +473,22 @@ class ModelGateway:
 
     @staticmethod
     def _best_sentence(content: str, query_terms: set) -> str:
-        candidates = re.split(r"(?<=[.!?])\s+|\n+", content)
+        # Prefer a compact paragraph/section over an isolated heading or a
+        # single bullet.  This is especially important for policies whose
+        # answer is a list (for example, LGPD data-subject rights): the
+        # deterministic fallback should show the list that the citation came
+        # from, not only the section title.
+        candidates = re.split(r"\n{2,}", content)
         nonempty = [candidate.strip() for candidate in candidates if candidate.strip()]
         if not nonempty:
             return content.strip()[:500]
 
         def rank(candidate: str) -> tuple:
-            words = set(
-                re.findall(r"[\wÀ-ÿ][\wÀ-ÿ._/-]*", candidate.lower(), flags=re.UNICODE)
-            )
-            return (len(words & query_terms), -abs(len(candidate) - 260), candidate.lower())
+            words = set(tokenize(candidate))
+            return (len(words & query_terms), min(len(candidate), 500), candidate.lower())
 
-        return max(nonempty, key=rank)[:500]
+        selected = max(nonempty, key=rank)
+        return re.sub(r"(?m)^#{1,6}\s*", "", selected)[:500]
 
     @staticmethod
     def _location(item: RetrievedChunk) -> str:

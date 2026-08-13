@@ -16,6 +16,7 @@ env/
 
 # Node modules & logs
 node_modules/
+frontend/dist/
 npm-debug.log*
 
 # Scratch & temporary artifacts

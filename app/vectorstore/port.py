@@ -67,7 +67,7 @@ class VectorStorePort(Protocol):
 
     backend_name: str
 
-    def upsert(self, chunks: List[Dict[str, Any]]) -> UpsertResult:
+    def upsert(self, chunks: List[Dict[str, Any]], *, force: bool = False) -> UpsertResult:
         ...
 
     def search(

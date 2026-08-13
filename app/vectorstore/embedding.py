@@ -108,6 +108,7 @@ class OpenAICompatibleEmbedding:
         base_url: str,
         timeout_seconds: float = 10.0,
         batch_size: int = 64,
+        input_type: str = "auto",
         client: Optional[Any] = None,
     ) -> None:
         parsed = urlsplit(base_url)
@@ -132,8 +133,23 @@ class OpenAICompatibleEmbedding:
         self.base_url = base_url.rstrip("/")
         self.timeout_seconds = max(1.0, min(float(timeout_seconds), 60.0))
         self.batch_size = max(1, min(int(batch_size), 256))
+        normalized_input_type = str(input_type).strip().lower()
+        if normalized_input_type not in {"auto", "none"}:
+            raise EmbeddingConfigurationError("Embedding input_type must be auto or none")
+        self.input_type = normalized_input_type
         self._api_key = api_key
         self._client = client
+        model_lower = self.model_name.lower()
+        self._requires_query_passage = self.input_type == "auto" and any(
+            marker in model_lower
+            for marker in (
+                "llama-nemotron-embed",
+                "llama-3.2-nv-embedqa",
+                "nemoretriever",
+                "embedqa-e5",
+                "embedqa-mistral",
+            )
+        )
         self.fingerprint = embedding_fingerprint(
             provider=self.provider_name,
             model=self.model_name,
@@ -145,10 +161,15 @@ class OpenAICompatibleEmbedding:
         )
 
     def embed(self, text: str) -> List[float]:
-        vectors = self.embed_many([text])
+        vectors = self._embed_many([text], input_type="query")
         return vectors[0]
 
     def embed_many(self, texts: Iterable[str]) -> List[List[float]]:
+        return self._embed_many(texts, input_type="passage")
+
+    def _embed_many(
+        self, texts: Iterable[str], *, input_type: str
+    ) -> List[List[float]]:
         values = [str(text).strip() for text in texts]
         if not values:
             return []
@@ -160,11 +181,17 @@ class OpenAICompatibleEmbedding:
         for start in range(0, len(values), self.batch_size):
             batch = values[start : start + self.batch_size]
             try:
-                response = client.embeddings.create(
-                    model=self.model_name,
-                    input=batch,
-                    dimensions=self.dimensions,
-                )
+                request: Dict[str, Any] = {
+                    "model": self.model_name,
+                    "input": batch,
+                    "dimensions": self.dimensions,
+                }
+                if self._requires_query_passage:
+                    # NVIDIA's Nemotron retriever API uses an OpenAI-compatible
+                    # endpoint but requires this extra discriminator to keep
+                    # passage/index vectors aligned with query vectors.
+                    request["extra_body"] = {"input_type": input_type}
+                response = client.embeddings.create(**request)
                 records = sorted(response.data, key=lambda item: int(item.index))
             except EmbeddingResponseError:
                 raise
@@ -208,7 +235,10 @@ class OpenAICompatibleEmbedding:
                 api_key=self._api_key,
                 base_url=self.base_url,
                 timeout=self.timeout_seconds,
-                max_retries=2,
+                # Rebuild is an explicit operator action.  Retrying a whole
+                # batch here makes a broken key or endpoint look like a hung
+                # index operation and can duplicate provider load.
+                max_retries=0,
             )
         return self._client
 
@@ -234,6 +264,7 @@ def create_embedding(configuration: Any) -> EmbeddingPort:
             ),
             timeout_seconds=float(getattr(configuration, "embedding_timeout_seconds", 10.0)),
             batch_size=int(getattr(configuration, "embedding_batch_size", 64)),
+            input_type=str(getattr(configuration, "embedding_input_type", "auto")),
         )
     if provider == "disabled":
         raise EmbeddingConfigurationError(

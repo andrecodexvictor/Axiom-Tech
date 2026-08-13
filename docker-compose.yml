@@ -1,8 +1,10 @@
+name: axiom-tech
+
 services:
   api:
-    build:
-      context: .
-      target: api
+    image: ${AXIOM_API_IMAGE:?AXIOM_API_IMAGE must reference an immutable GHCR image}
+    pull_policy: always
+    init: true
     environment:
       AXIOM_DOCUMENTS_DIR: /app/documentos
       AXIOM_CHROMA_PATH: /data/chroma
@@ -13,6 +15,7 @@ services:
       AXIOM_EMBEDDING_DIMENSIONS: ${AXIOM_EMBEDDING_DIMENSIONS:-384}
       AXIOM_EMBEDDING_BASE_URL: ${AXIOM_EMBEDDING_BASE_URL:-https://api.openai.com/v1}
       AXIOM_EMBEDDING_API_KEY: ${AXIOM_EMBEDDING_API_KEY:-}
+      AXIOM_EMBEDDING_INPUT_TYPE: ${AXIOM_EMBEDDING_INPUT_TYPE:-auto}
       AXIOM_EMBEDDING_TIMEOUT_SECONDS: ${AXIOM_EMBEDDING_TIMEOUT_SECONDS:-10}
       AXIOM_EMBEDDING_BATCH_SIZE: ${AXIOM_EMBEDDING_BATCH_SIZE:-64}
       AXIOM_RETRIEVAL_CANDIDATE_MULTIPLIER: ${AXIOM_RETRIEVAL_CANDIDATE_MULTIPLIER:-4}
@@ -22,13 +25,13 @@ services:
       AXIOM_LLM_PROVIDER: ${AXIOM_LLM_PROVIDER:-}
       AXIOM_LLM_FALLBACK: ${AXIOM_LLM_FALLBACK:-}
       AXIOM_LLM_ROUTES: ${AXIOM_LLM_ROUTES:-}
-      AXIOM_LLM_TIMEOUT_SECONDS: ${AXIOM_LLM_TIMEOUT_SECONDS:-30}
-      AXIOM_LLM_MAX_RETRIES: ${AXIOM_LLM_MAX_RETRIES:-1}
+      AXIOM_LLM_TIMEOUT_SECONDS: ${AXIOM_LLM_TIMEOUT_SECONDS:-8}
+      AXIOM_LLM_MAX_RETRIES: ${AXIOM_LLM_MAX_RETRIES:-0}
       AXIOM_LLM_CIRCUIT_FAILURE_THRESHOLD: ${AXIOM_LLM_CIRCUIT_FAILURE_THRESHOLD:-3}
       AXIOM_LLM_CIRCUIT_RECOVERY_SECONDS: ${AXIOM_LLM_CIRCUIT_RECOVERY_SECONDS:-30}
       AXIOM_NVIDIA_ENABLED: ${AXIOM_NVIDIA_ENABLED:-false}
       NVIDIA_API_KEY: ${NVIDIA_API_KEY:-}
-      NVIDIA_MODEL: ${NVIDIA_MODEL:-meta/llama-3.1-70b-instruct}
+      NVIDIA_MODEL: ${NVIDIA_MODEL:-meta/muse-glimmer-30b}
       AXIOM_NVIDIA_BASE_URL: ${AXIOM_NVIDIA_BASE_URL:-https://integrate.api.nvidia.com/v1}
       NVIDIA_KIMI_MODEL: ${NVIDIA_KIMI_MODEL:-moonshotai/kimi-k2.6}
       NVIDIA_MINIMAX_MODEL: ${NVIDIA_MINIMAX_MODEL:-minimaxai/minimax-m3}
@@ -60,6 +63,15 @@ services:
       - "8000:8000"
     volumes:
       - chroma_data:/data
+    tmpfs:
+      - /tmp:size=16m,noexec,nosuid
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 576m
+    mem_reservation: 192m
+    pids_limit: 128
     healthcheck:
       test:
         - CMD
@@ -73,16 +85,27 @@ services:
     restart: unless-stopped
 
   frontend:
-    build:
-      context: .
-      target: frontend
-      args:
-        VITE_API_BASE_URL: ""
+    image: ${AXIOM_FRONTEND_IMAGE:?AXIOM_FRONTEND_IMAGE must reference an immutable GHCR image}
+    pull_policy: always
+    init: true
     depends_on:
       api:
         condition: service_healthy
     ports:
       - "8080:80"
+    read_only: true
+    tmpfs:
+      - /var/cache/nginx:size=8m,noexec,nosuid
+      - /var/run:size=1m,noexec,nosuid
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 64m
+    mem_reservation: 16m
+    pids_limit: 64
     restart: unless-stopped
 
 volumes:

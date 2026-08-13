@@ -1,6 +1,6 @@
 # V3 HTTP API Contract
 
-## Status
+## Overview
 
 This is the V3 integration contract for the FastAPI boundary. It is intentionally versioned under /api/v1; clients should not call graph, vector-store, or model-provider modules directly.
 
@@ -12,6 +12,8 @@ This is the V3 integration contract for the FastAPI boundary. It is intentionall
 | GET | /api/v1/status | Safe runtime status, such as selected local/optional providers and observability state. |
 | POST | /api/v1/query | Run the grounded query workflow. |
 | POST | /api/v1/ingest | Explicitly index the configured internal corpus. |
+| GET | /api/v1/sources | List safe metadata and index state for each supported corpus file. |
+| POST | /api/v1/embeddings/rebuild | Recalculate every indexed vector using the active embedding provider. |
 
 ## Query
 
@@ -52,13 +54,19 @@ The response is typed JSON. Its stable concepts are an answer, selected domain/s
     }
   ],
   "rewrite_count": 0,
-  "grounded": true
+  "grounded": true,
+  "duration_ms": 182.4,
+  "timings_ms": {
+    "retrieval_ms": 4.1,
+    "synthesis_ms": 176.8,
+    "total_ms": 182.4
+  }
 }
 ~~~
 
 The optional query domain is one of rh, juridico, engenharia, api_spec, or web; top_k is between 1 and 10. The `web` domain is explicit and fail-closed: it makes no outbound request unless web research, a Serper credential, and an HTTPS hostname allowlist are all configured. Internal citations may carry page, slide, sheet, and a corpus-relative path; verified external citations carry a URL. Clients must tolerate an empty citation array and missing optional locators. The trace contains execution metadata only; it is not a model chain-of-thought.
 
-## Status
+## Runtime status
 
 `GET /api/v1/status` reports the selected runtime contracts without making a
 billable provider call. A representative response is:
@@ -125,6 +133,12 @@ backend is not the persistent Chroma adapter. Changing an embedding provider,
 model, dimension, implementation endpoint, or normalization contract selects a
 new physical collection and requires explicit ingestion.
 
+`status=empty` means Chroma is available but its active, fingerprinted
+collection has no chunks yet. `vector_store.ready` is the client-safe readiness
+flag. `source_count` reports distinct corpus files when the backend supports
+inventory, and `reason` is a sanitized operational code when the store is
+degraded.
+
 The response never returns an API key, endpoint, absolute corpus path,
 source-document payload, provider response, or exception message. Model route
 entries expose only their name/provider/model, configured state, and in-process
@@ -135,6 +149,14 @@ If evidence is inadequate, the API returns a clear non-hallucinated limitation, 
 ## Ingestion
 
 POST /api/v1/ingest starts a deliberate pass over AXIOM_DOCUMENTS_DIR. Its optional path request field must resolve inside that directory. The result reports received, inserted, updated, unchanged, and skipped counts plus per-file outcomes so an administrator can identify failures. Ingestion is idempotent for unchanged chunks.
+
+Set `{ "force": true }` on the ingestion request to rewrite all chunks with
+the active embedding provider. The dedicated `POST /api/v1/embeddings/rebuild`
+operation is the preferred UI action for an intentional full re-embedding.
+
+`GET /api/v1/sources` returns only relative paths, domain, file type, size,
+modification time, expected/indexed chunk counts, and a state of `indexed`,
+`pending`, `stale`, or `error`; it does not return document contents.
 
 ## Errors
 

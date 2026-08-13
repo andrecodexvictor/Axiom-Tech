@@ -1,9 +1,10 @@
-import { useState } from 'react';
+import { memo, useEffect, useRef, useState } from 'react';
 import {
   ApiError,
   type Citation,
   type IngestResponse,
   type QueryResponse,
+  type SourcesResponse,
   type SystemStatus,
 } from './api';
 
@@ -18,10 +19,17 @@ export type IndexState = {
   message?: string;
 };
 
+export type SourceState = {
+  phase: 'loading' | 'ready' | 'error';
+  data?: SourcesResponse;
+  error?: string;
+};
+
 export type IconName =
   | 'arrow-up'
   | 'book'
   | 'check'
+  | 'clock'
   | 'chevron'
   | 'copy'
   | 'database'
@@ -101,6 +109,8 @@ export function Icon({ name, size = 18 }: { name: IconName; size?: number }) {
       return <svg {...common}><path d="M4.5 5.5A2.5 2.5 0 0 1 7 3h11v16H7a2.5 2.5 0 0 0-2.5 2.5v-16Z" /><path d="M7 3v16" /></svg>;
     case 'check':
       return <svg {...common}><path d="m5 12 4.2 4.2L19 6.5" /></svg>;
+    case 'clock':
+      return <svg {...common}><circle cx="12" cy="12" r="8.5" /><path d="M12 7v5l3.2 2" /></svg>;
     case 'chevron':
       return <svg {...common}><path d="m8 10 4 4 4-4" /></svg>;
     case 'copy':
@@ -149,6 +159,11 @@ export function formatCount(value: number): string {
   return new Intl.NumberFormat('pt-BR').format(value);
 }
 
+function formatDuration(value: number): string {
+  if (value < 1000) return `${Math.round(value)} ms`;
+  return `${(value / 1000).toFixed(1).replace('.', ',')} s`;
+}
+
 function pluralize(value: number, singular: string, plural: string): string {
   return `${formatCount(value)} ${value === 1 ? singular : plural}`;
 }
@@ -180,6 +195,10 @@ export function getSystemSummary(state: StatusState): {
       label: state.data ? 'Status desatualizado' : 'Serviço indisponível',
       tone: 'danger',
     };
+  }
+
+  if (state.data?.status === 'empty' || state.data?.vector_store.ready === false) {
+    return { label: 'Índice sem documentos', tone: 'warning' };
   }
 
   if (state.data?.status === 'ok') {
@@ -257,7 +276,7 @@ function responseHasEvidence(response: QueryResponse): boolean {
   return response.grounded && response.citations.length > 0;
 }
 
-export function AnswerPanel({ response, question }: { response: QueryResponse; question: string }) {
+export const AnswerPanel = memo(function AnswerPanel({ response, question }: { response: QueryResponse; question: string }) {
   const hasEvidence = responseHasEvidence(response);
 
   return (
@@ -295,6 +314,9 @@ export function AnswerPanel({ response, question }: { response: QueryResponse; q
         {response.rewrite_count > 0 && (
           <div><dt>Ajustes de busca</dt><dd>{formatCount(response.rewrite_count)}</dd></div>
         )}
+        {response.duration_ms != null && response.duration_ms > 0 && (
+          <div><dt>Tempo total</dt><dd>{formatDuration(response.duration_ms)}</dd></div>
+        )}
       </dl>
 
       <details className="trace-disclosure">
@@ -318,7 +340,7 @@ export function AnswerPanel({ response, question }: { response: QueryResponse; q
       </details>
     </article>
   );
-}
+});
 
 export function EmptyAnswer() {
   return (
@@ -370,6 +392,7 @@ function getSafeExternalUrl(url?: string): string | undefined {
 
 function CitationItem({ citation, order }: { citation: Citation; order: number }) {
   const [copyState, setCopyState] = useState<'idle' | 'copied' | 'error'>('idle');
+  const copyResetTimerRef = useRef<number | null>(null);
   const safeUrl = getSafeExternalUrl(citation.url);
   const locator = getCitationLocator(citation);
   const score = Number.isFinite(citation.score)
@@ -390,11 +413,19 @@ function CitationItem({ citation, order }: { citation: Citation; order: number }
       if (!navigator.clipboard) throw new Error('Clipboard unavailable');
       await navigator.clipboard.writeText(reference);
       setCopyState('copied');
-      window.setTimeout(() => setCopyState('idle'), 1800);
+      if (copyResetTimerRef.current != null) window.clearTimeout(copyResetTimerRef.current);
+      copyResetTimerRef.current = window.setTimeout(() => {
+        copyResetTimerRef.current = null;
+        setCopyState('idle');
+      }, 1800);
     } catch {
       setCopyState('error');
     }
   };
+
+  useEffect(() => () => {
+    if (copyResetTimerRef.current != null) window.clearTimeout(copyResetTimerRef.current);
+  }, []);
 
   return (
     <li className="source-item">
@@ -428,7 +459,7 @@ function CitationItem({ citation, order }: { citation: Citation; order: number }
   );
 }
 
-export function EvidencePanel({ response }: { response: QueryResponse }) {
+export const EvidencePanel = memo(function EvidencePanel({ response }: { response: QueryResponse }) {
   const hasEvidence = responseHasEvidence(response);
 
   return (
@@ -466,7 +497,7 @@ export function EvidencePanel({ response }: { response: QueryResponse }) {
       )}
     </section>
   );
-}
+});
 
 export function LoadingEvidence() {
   return (
@@ -515,21 +546,35 @@ function getStoreLabel(backend: string): string {
   return labels[backend.toLowerCase()] ?? 'Índice configurado';
 }
 
+function getStoreReason(reason?: string | null): string | undefined {
+  const labels: Record<string, string> = {
+    chroma_unavailable: 'Chroma não pôde ser carregado; o índice temporário não persiste entre reinícios.',
+    embedding_not_configured: 'Embeddings não configurados; nenhuma fonte pode ser recuperada.',
+    unsupported_vector_backend: 'O backend vetorial selecionado não é suportado neste runtime.',
+    pinecone_not_configured: 'Pinecone foi selecionado sem credenciais e índice configurados.',
+    vector_store_unavailable: 'O armazenamento vetorial está indisponível nesta configuração.',
+  };
+  return reason ? labels[reason] ?? reason : undefined;
+}
+
 function getEmbeddingLabel(status: SystemStatus): string {
   const embedding = status.vector_store.embedding;
   if (!embedding?.configured) return 'Indisponível';
   if (embedding.provider === 'deterministic') {
-    return `Local determinístico · ${formatCount(embedding.dimensions)} dimensões`;
+    return `Local determinístico · ${formatCount(embedding.dimensions)} dimensões · offline`;
   }
   return `${embedding.model || embedding.provider} · ${formatCount(embedding.dimensions)} dimensões`;
 }
 
 function getModelLabel(status: SystemStatus): string {
   const primary = status.models.routes?.[0];
+  if (primary && primary.provider !== 'deterministic' && !primary.configured) {
+    return 'Rota remota sem credencial · fallback local';
+  }
   if (!status.models.remote_enabled || primary?.provider === 'deterministic') {
     return 'Resposta local determinística';
   }
-  return primary?.model || status.models.model || 'Síntese remota habilitada';
+  return `${primary?.model || status.models.model || 'Síntese remota habilitada'} · credencial configurada`;
 }
 
 function getObservabilityLabel(status: SystemStatus): string {
@@ -548,16 +593,110 @@ function getWebResearchLabel(status: SystemStatus): string {
   return 'Desativada';
 }
 
-export function StatusPanel({
+function formatBytes(value: number): string {
+  if (value < 1024) return `${value} B`;
+  if (value < 1024 * 1024) return `${Math.round(value / 1024)} KB`;
+  return `${(value / (1024 * 1024)).toFixed(1).replace('.', ',')} MB`;
+}
+
+function formatSourceStatus(status: string): { label: string; tone: string } {
+  const labels: Record<string, { label: string; tone: string }> = {
+    indexed: { label: 'Indexado', tone: 'indexed' },
+    pending: { label: 'Pendente', tone: 'pending' },
+    stale: { label: 'Precisa atualizar', tone: 'stale' },
+    error: { label: 'Com erro', tone: 'error' },
+  };
+  return labels[status] ?? { label: sentenceCase(status), tone: 'pending' };
+}
+
+export const SourceInventoryPanel = memo(function SourceInventoryPanel({
+  state,
+  onRefresh,
+}: {
+  state: SourceState;
+  onRefresh: () => void;
+}) {
+  const data = state.data;
+  return (
+    <section className="source-inventory" aria-busy={state.phase === 'loading'} aria-labelledby="source-inventory-heading">
+      <header className="panel-heading">
+        <div>
+          <p>Corpus integrado</p>
+          <h2 id="source-inventory-heading">Documentos disponíveis</h2>
+        </div>
+        <button
+          className="icon-button"
+          type="button"
+          onClick={onRefresh}
+          disabled={state.phase === 'loading'}
+          aria-label="Atualizar documentos integrados"
+        >
+          <Icon name="refresh" size={16} />
+        </button>
+      </header>
+
+      {state.phase === 'loading' && !data && (
+        <div className="inventory-loading" aria-busy="true" aria-label="Carregando documentos integrados">
+          <span className="skeleton skeleton--medium" />
+          <span className="skeleton" />
+          <span className="skeleton skeleton--short" />
+        </div>
+      )}
+
+      {state.phase === 'error' && (
+        <div className="inventory-error" role="alert">
+          <p>{state.error}</p>
+          <button className="text-action" type="button" onClick={onRefresh}>Tentar novamente</button>
+        </div>
+      )}
+
+      {data && (
+        <>
+          <div className="inventory-summary">
+            <strong>{formatCount(data.indexed)} de {formatCount(data.total)} arquivos indexados</strong>
+            <span>{data.pending > 0 ? `${formatCount(data.pending)} precisam de atenção` : 'Corpus sincronizado'}</span>
+          </div>
+          <ul className="inventory-list">
+            {data.sources.map((source) => {
+              const stateLabel = formatSourceStatus(source.status);
+              return (
+                <li key={source.path} className="inventory-item">
+                  <div className="inventory-item-heading">
+                    <Icon name="file" size={16} />
+                    <div>
+                      <strong title={source.path}>{source.path}</strong>
+                      <span>{formatDomain(source.domain)} · {source.file_type.toUpperCase()} · {formatBytes(source.size_bytes)}</span>
+                    </div>
+                    <span className={`inventory-status inventory-status--${stateLabel.tone}`}>{stateLabel.label}</span>
+                  </div>
+                  <div className="inventory-item-meta">
+                    <span>{formatCount(source.indexed_chunks)} / {formatCount(source.expected_chunks)} trechos</span>
+                    {source.message && <span>{source.message}</span>}
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        </>
+      )}
+
+      <p className="inventory-note">A lista mostra somente metadados seguros; o conteúdo continua no corpus configurado do serviço.</p>
+    </section>
+  );
+});
+
+export const StatusPanel = memo(function StatusPanel({
   state,
   indexState,
   onRefresh,
   onReindex,
+  onRebuildEmbeddings,
 }: {
   state: StatusState;
   indexState: IndexState;
   onRefresh: () => void;
   onReindex: () => void;
+  onRebuildEmbeddings: () => void;
 }) {
   const status = state.data;
   const summary = getSystemSummary(state);
@@ -565,7 +704,7 @@ export function StatusPanel({
   const isIndexing = indexState.phase === 'loading';
 
   return (
-    <section className="status-panel" id="system-status" aria-labelledby="system-status-heading">
+    <section className="status-panel" id="system-status" aria-busy={isLoading || isIndexing} aria-labelledby="system-status-heading">
       <header className="panel-heading">
         <div>
           <p>Operação</p>
@@ -604,13 +743,17 @@ export function StatusPanel({
 
       {status && (
         <dl className="system-details">
-          <div><dt>Conteúdo indexado</dt><dd>{pluralize(status.vector_store.document_count, 'trecho', 'trechos')}</dd></div>
+          <div><dt>Conteúdo indexado</dt><dd>{status.vector_store.source_count != null ? `${pluralize(status.vector_store.source_count, 'arquivo', 'arquivos')} · ` : ''}{pluralize(status.vector_store.document_count, 'trecho', 'trechos')}</dd></div>
           <div><dt>Armazenamento</dt><dd>{getStoreLabel(status.vector_store.backend)}</dd></div>
           <div><dt>Embeddings</dt><dd>{getEmbeddingLabel(status)}</dd></div>
           <div><dt>Modo de resposta</dt><dd>{getModelLabel(status)}</dd></div>
           <div><dt>Observabilidade</dt><dd>{getObservabilityLabel(status)}</dd></div>
           <div><dt>Pesquisa externa</dt><dd>{getWebResearchLabel(status)}</dd></div>
         </dl>
+      )}
+
+      {status?.vector_store.reason && (
+        <p className="status-note status-note--warning"><Icon name="warning" size={14} />{getStoreReason(status.vector_store.reason)}</p>
       )}
 
       <details className="maintenance-disclosure">
@@ -620,6 +763,11 @@ export function StatusPanel({
           <button className="button button--secondary button--full" type="button" onClick={onReindex} disabled={isIndexing}>
             <Icon name="refresh" size={16} />
             {isIndexing ? 'Reindexando documentos…' : 'Reindexar agora'}
+          </button>
+          <p className="maintenance-hint">Para recalcular todos os vetores com o provider/modelo atual, use a ação abaixo.</p>
+          <button className="button button--secondary button--full" type="button" onClick={onRebuildEmbeddings} disabled={isIndexing}>
+            <Icon name="database" size={16} />
+            {isIndexing ? 'Gerando embeddings…' : 'Gerar embeddings novamente'}
           </button>
           {indexState.message && (
             <p className={`index-feedback index-feedback--${indexState.phase}`} role={indexState.phase === 'error' ? 'alert' : 'status'}>
@@ -633,4 +781,4 @@ export function StatusPanel({
       {status && <p className="status-version">Interface conectada ao contrato v{status.version}</p>}
     </section>
   );
-}
+});

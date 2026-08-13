@@ -122,6 +122,8 @@ GET  /api/v1/health
 GET  /api/v1/status
 POST /api/v1/query
 POST /api/v1/ingest
+GET  /api/v1/sources
+POST /api/v1/embeddings/rebuild
 ```
 
 ### 3. Iniciar o frontend
@@ -138,13 +140,19 @@ npm --prefix frontend install
 npm --prefix frontend run dev
 ```
 
-### 4. Executar com Docker Compose
+### 4. Executar imagens publicadas pelo GitHub Actions
 
 ```bash
-docker compose up --build
+export RELEASE_SHA=<commit-de-40-caracteres>
+export AXIOM_API_IMAGE=ghcr.io/andrecodexvictor/axiom-tech-api:sha-$RELEASE_SHA
+export AXIOM_FRONTEND_IMAGE=ghcr.io/andrecodexvictor/axiom-tech-frontend:sha-$RELEASE_SHA
+docker compose pull
+docker compose up -d --no-build
 ```
 
 O frontend ficará em http://localhost:8080 e a API em http://localhost:8000.
+O repositório não faz build de imagem na máquina local ou na VM; para
+desenvolvimento sem imagens, use os processos Python e Vite das etapas acima.
 
 ## Ingestão e uso do agente
 
@@ -154,6 +162,18 @@ A ingestão é explícita e idempotente. Pela API:
 curl -X POST http://localhost:8000/api/v1/ingest \
   -H "Content-Type: application/json" \
   -d "{}"
+```
+
+Veja quais arquivos estão integrados e se algum precisa de atualização:
+
+```bash
+curl http://localhost:8000/api/v1/sources
+```
+
+Para recalcular todos os vetores com o provider/modelo de embeddings ativo:
+
+```bash
+curl -X POST http://localhost:8000/api/v1/embeddings/rebuild
 ```
 
 Uma consulta fundamentada:
@@ -180,6 +200,10 @@ print(documents[0]["metadata"])
 ```
 
 O mesmo loader possui caminhos específicos para PDF, DOCX, XLSX, PPTX, JSON, HTML, Markdown e texto. PDF e PowerPoint preservam o número da página ou do slide quando disponível; planilhas preservam o nome da aba.
+
+Para ampliar o conhecimento interno, coloque arquivos aprovados em uma pasta de domínio dentro de `documentos/` (por exemplo, `documentos/financeiro/relatorio.md`) e execute a ingestão. O painel **Documentos disponíveis** mostra o arquivo, tipo, tamanho, estado e quantidade de trechos; a ação **Gerar embeddings novamente** recalcula todos os vetores com o provider atualmente configurado. O inventário não exibe o conteúdo do documento no navegador.
+
+Pesquisa externa é uma fonte separada e opt-in: configure `AXIOM_WEB_ENABLED=true`, uma `SERPER_API_KEY` e uma allowlist HTTPS em `AXIOM_WEB_ALLOWLIST`. Sem os três itens, perguntas com domínio `web` permanecem desativadas e não fazem chamadas externas.
 
 ## Exemplos de perguntas e respostas
 
@@ -254,7 +278,7 @@ exemplo, NVIDIA com fallback local apenas para falhas transitórias:
 AXIOM_LLM_PROVIDER=nvidia
 AXIOM_LLM_FALLBACK=deterministic
 NVIDIA_API_KEY=<provider-key>
-NVIDIA_MODEL=meta/llama-3.1-70b-instruct
+NVIDIA_MODEL=meta/muse-glimmer-30b
 ```
 
 OpenAI usa `AXIOM_LLM_PROVIDER=openai`, `OPENAI_API_KEY` e `OPENAI_MODEL`.
@@ -268,9 +292,15 @@ gateway de síntese:
 ```dotenv
 AXIOM_EMBEDDING_PROVIDER=openai
 AXIOM_EMBEDDING_API_KEY=<embedding-key>
-AXIOM_EMBEDDING_MODEL=text-embedding-3-small
-AXIOM_EMBEDDING_DIMENSIONS=1536
+AXIOM_EMBEDDING_MODEL=nvidia/nemotron-3-embed-1b
+AXIOM_EMBEDDING_DIMENSIONS=2048
+AXIOM_EMBEDDING_BASE_URL=https://integrate.api.nvidia.com/v1
+AXIOM_EMBEDDING_INPUT_TYPE=auto
 ```
+
+O cliente também entende automaticamente o modo
+`passage` na indexação e `query` na busca para a variante
+`nvidia/llama-nemotron-embed-1b-v2`.
 
 Trocar provider, modelo, dimensão ou endpoint de embeddings seleciona uma nova
 coleção física versionada; execute a ingestão explícita depois da mudança. Uma
@@ -316,16 +346,8 @@ O API Gateway fornece um hostname HTTPS Oracle sem exigir que o usuário registr
 2. Crie um deployment com rota wildcard e backend HTTP apontando para o IP privado da VM na porta 8080.
 3. Libere TCP 443 de forma stateful na Security List ou NSG da subnet do Gateway.
 4. Configure `PUBLIC_URL` com o hostname `*.apigateway.<region>.oci.customer-oci.com`.
-5. Inicie a composição específica da VM:
-
-```bash
-AXIOM_CORS_ORIGINS=https://<gateway-hostname> \
-docker compose \
-  -f docker-compose.yml \
-  -f docker-compose.oci.yml \
-  -f docker-compose.gateway.yml \
-  up -d --build
-```
+5. Configure `PUBLIC_URL` no ambiente `production` do GitHub. O workflow aplica a
+   composição específica da VM com imagens imutáveis; não há build na VM.
 
 O Gateway é o ponto público; a VM não precisa expor as portas 80/443. Depois de validar o Gateway, a regra pública TCP/8080 da VM deve ser removida ou restringida ao CIDR do Gateway.
 
@@ -333,15 +355,20 @@ O endpoint Oracle já foi criado, mas a validação externa depende da regra TCP
 
 ## Deploy automático por commit
 
-O arquivo [.github/workflows/deploy-oci.yml](.github/workflows/deploy-oci.yml) publica a branch main por SSH depois que o workflow V3 CI termina com sucesso. O deploy:
+Os workflows constroem e publicam imagens multi-arquitetura (`linux/amd64` e
+`linux/arm64`) no GHCR. O arquivo
+[.github/workflows/deploy-oci.yml](.github/workflows/deploy-oci.yml) publica a
+branch `main` por SSH somente depois que o workflow **Axiom CI** termina com
+sucesso. O deploy:
 
 1. conecta à VM;
 2. busca exatamente o commit aprovado;
 3. preserva o .env ignorado do servidor;
-4. valida o Compose;
-5. reconstrói e reinicia API e frontend atrás do API Gateway;
-6. executa a ingestão idempotente;
-7. verifica o health check local e o link público.
+4. autentica temporariamente a VM no GHCR com o token do próprio workflow;
+5. valida o Compose e baixa as imagens `sha-<commit>`;
+6. reinicia API e frontend com `--no-build`;
+7. executa a reindexação apenas quando solicitada manualmente;
+8. verifica o health check local e o link público.
 
 Configure no GitHub um ambiente chamado production.
 
@@ -376,7 +403,7 @@ git commit
 git push origin main
         |
         v
-V3 CI
+Axiom CI (testes + imagens GHCR)
         |
         v
 Deploy OCI

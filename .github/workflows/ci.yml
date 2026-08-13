@@ -1,4 +1,4 @@
-name: V3 CI
+name: Axiom CI
 
 on:
   push:
@@ -8,16 +8,26 @@ on:
 permissions:
   contents: read
 
+env:
+  AXIOM_API_IMAGE: ghcr.io/${{ github.repository_owner }}/axiom-tech-api:sha-${{ github.sha }}
+  AXIOM_FRONTEND_IMAGE: ghcr.io/${{ github.repository_owner }}/axiom-tech-frontend:sha-${{ github.sha }}
+
 jobs:
   backend:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
       - run: python -m pip install --upgrade pip
-      - run: python -m pip install -r requirements.txt
+      - run: python -m pip install -r requirements-dev.txt
       - run: python -m compileall -q app
       - name: Run Python tests when present
         run: |
@@ -29,12 +39,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          persist-credentials: false
       - uses: pnpm/action-setup@v4
         with:
-          version: "9"
+          version: "9.15.4"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
       - run: pnpm --dir frontend install --frozen-lockfile
       - run: pnpm --dir frontend check
       - run: pnpm --dir frontend build
@@ -43,8 +57,72 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - name: Validate Compose configurations
         run: |
+          set -eu
           docker compose config --quiet
           PUBLIC_HOST=localhost docker compose -f docker-compose.yml -f docker-compose.oci.yml -f docker-compose.public.yml config --quiet
           AXIOM_CORS_ORIGINS=https://example.invalid docker compose -f docker-compose.yml -f docker-compose.oci.yml -f docker-compose.gateway.yml config --quiet
+
+  container-images:
+    needs: [backend, frontend, container-config]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Enable ARM64 emulation
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up BuildKit
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR for main builds
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and publish API image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          target: api
+          platforms: ${{ github.event_name == 'push' && 'linux/amd64,linux/arm64' || 'linux/amd64' }}
+          push: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+          tags: ${{ env.AXIOM_API_IMAGE }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+          cache-from: type=gha,scope=axiom-api
+          cache-to: type=gha,mode=max,scope=axiom-api
+          provenance: ${{ github.event_name == 'push' && 'mode=max' || 'false' }}
+          sbom: ${{ github.event_name == 'push' }}
+
+      - name: Build and publish frontend image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          target: frontend
+          platforms: ${{ github.event_name == 'push' && 'linux/amd64,linux/arm64' || 'linux/amd64' }}
+          push: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+          tags: ${{ env.AXIOM_FRONTEND_IMAGE }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+          cache-from: type=gha,scope=axiom-frontend
+          cache-to: type=gha,mode=max,scope=axiom-frontend
+          provenance: ${{ github.event_name == 'push' && 'mode=max' || 'false' }}
+          sbom: ${{ github.event_name == 'push' }}

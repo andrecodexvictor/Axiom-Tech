@@ -15,7 +15,64 @@ STOP_WORDS = {
     "a", "an", "and", "as", "at", "como", "da", "das", "de", "do", "dos", "e",
     "are", "do", "does", "em", "for", "how", "is", "na", "nas", "no", "nos", "o",
     "of", "on", "or", "os", "our", "para", "por", "qual", "que", "the", "to", "um",
-    "uma", "we", "what", "with", "é",
+    "uma", "we", "what", "with", "é", "sao", "segundo", "according",
+}
+
+
+# The local embedding is intentionally deterministic and lexical.  These
+# canonical terms give it a small, auditable PT↔EN vocabulary bridge while a
+# semantic provider is unavailable; they are applied to both query and corpus
+# tokens, so they cannot fabricate evidence by themselves.
+_CANONICAL_TERMS = {
+    "beneficio": "benefit",
+    "beneficios": "benefit",
+    "benefit": "benefit",
+    "benefits": "benefit",
+    "correcao": "correction",
+    "correction": "correction",
+    "corrections": "correction",
+    "dados": "data",
+    "data": "data",
+    "direito": "right",
+    "direitos": "right",
+    "right": "right",
+    "rights": "right",
+    "entidade": "entity",
+    "entidades": "entity",
+    "entities": "entity",
+    "incidente": "incident",
+    "incidentes": "incident",
+    "incident": "incident",
+    "incidents": "incident",
+    "informacao": "information",
+    "informacoes": "information",
+    "information": "information",
+    "lgpd": "lgpd",
+    "meal": "meal",
+    "refeicao": "meal",
+    "refeicoes": "meal",
+    "politica": "policy",
+    "politicas": "policy",
+    "policy": "policy",
+    "policies": "policy",
+    "portabilidade": "portability",
+    "portability": "portability",
+    "privacidade": "privacy",
+    "privacy": "privacy",
+    "processamento": "processing",
+    "processing": "processing",
+    "procedimento": "procedure",
+    "procedimentos": "procedure",
+    "procedure": "procedure",
+    "procedures": "procedure",
+    "severidade": "severity",
+    "severity": "severity",
+    "sujeito": "subject",
+    "sujeitos": "subject",
+    "subject": "subject",
+    "subjects": "subject",
+    "titular": "subject",
+    "titulares": "subject",
 }
 
 
@@ -186,4 +243,13 @@ def _meaningful_terms(value: str) -> frozenset[str]:
 def _tokens(value: str) -> List[str]:
     normalized = unicodedata.normalize("NFKD", value.casefold())
     normalized = "".join(character for character in normalized if not unicodedata.combining(character))
-    return re.findall(r"[a-z0-9][a-z0-9._/-]*", normalized)
+    return [
+        _CANONICAL_TERMS.get(token, token)
+        for token in re.findall(r"[a-z0-9][a-z0-9._/-]*", normalized)
+    ]
+
+
+def tokenize(value: str) -> List[str]:
+    """Expose the same normalized vocabulary to grounding checks."""
+
+    return _tokens(value)

@@ -2,13 +2,20 @@ name: Deploy OCI
 
 on:
   workflow_run:
-    workflows: ["V3 CI"]
+    workflows: ["Axiom CI"]
     types: [completed]
     branches: [main]
   workflow_dispatch:
+    inputs:
+      reindex:
+        description: Rebuild the persistent Chroma index after the image rollout
+        required: true
+        default: false
+        type: boolean
 
 permissions:
   contents: read
+  packages: read
 
 concurrency:
   group: production-oci
@@ -27,16 +34,24 @@ jobs:
       OCI_DEPLOY_USER: ${{ vars.OCI_DEPLOY_USER }}
       OCI_DEPLOY_PATH: ${{ vars.OCI_DEPLOY_PATH }}
       PUBLIC_URL: ${{ vars.PUBLIC_URL }}
+      GHCR_NAMESPACE: ghcr.io/${{ github.repository_owner }}
+      GHCR_USERNAME: ${{ github.actor }}
+      GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      REINDEX: ${{ inputs.reindex || false }}
 
     steps:
       - name: Validate deployment settings
         shell: bash
         run: |
-          set -eu
+          set -euo pipefail
+          [[ "$RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "Invalid release SHA"; exit 1; }
           test -n "$OCI_DEPLOY_HOST"
           test -n "$OCI_DEPLOY_USER"
           test -n "$OCI_DEPLOY_PATH"
           test -n "$PUBLIC_URL"
+          test -n "$GHCR_USERNAME"
+          test -n "$GHCR_TOKEN"
+          [[ "$GHCR_USERNAME" =~ ^[A-Za-z0-9_.-]+$ ]] || { echo "Invalid GHCR username"; exit 1; }
           case "$PUBLIC_URL" in
             http://*|https://*) ;;
             *) echo "PUBLIC_URL must use http:// or https://"; exit 1 ;;
@@ -48,7 +63,7 @@ jobs:
           SSH_KNOWN_HOSTS: ${{ secrets.OCI_KNOWN_HOSTS }}
         shell: bash
         run: |
-          set -eu
+          set -euo pipefail
           test -n "$SSH_PRIVATE_KEY"
           test -n "$SSH_KNOWN_HOSTS"
           install -d -m 700 "$HOME/.ssh"
@@ -56,37 +71,81 @@ jobs:
           printf '%s\n' "$SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
           chmod 600 "$HOME/.ssh/axiom-oci" "$HOME/.ssh/known_hosts"
 
-      - name: Deploy approved commit
+      - name: Authenticate VM to GHCR
         shell: bash
         run: |
-          set -eu
-          ssh -i "$HOME/.ssh/axiom-oci" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes "$OCI_DEPLOY_USER@$OCI_DEPLOY_HOST" "RELEASE_SHA='$RELEASE_SHA' DEPLOY_PATH='$OCI_DEPLOY_PATH' PUBLIC_URL='$PUBLIC_URL' bash -s" <<'REMOTE'
-          set -eu
+          set -euo pipefail
+          printf -v ghcr_user_arg '%q' "$GHCR_USERNAME"
+          printf '%s' "$GHCR_TOKEN" | ssh \
+            -i "$HOME/.ssh/axiom-oci" \
+            -o BatchMode=yes \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            "$OCI_DEPLOY_USER@$OCI_DEPLOY_HOST" \
+            "sudo -n docker login ghcr.io --username $ghcr_user_arg --password-stdin"
 
-          case "$RELEASE_SHA" in
-            ''|*[!0-9a-f]*) echo "Invalid release SHA"; exit 1 ;;
-          esac
+      - name: Pull and run the approved immutable images
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf -v remote_args '%q ' "$RELEASE_SHA" "$OCI_DEPLOY_PATH" "$PUBLIC_URL" "$GHCR_NAMESPACE" "$REINDEX"
+          ssh \
+            -i "$HOME/.ssh/axiom-oci" \
+            -o BatchMode=yes \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            "$OCI_DEPLOY_USER@$OCI_DEPLOY_HOST" \
+            "bash -s -- $remote_args" <<'REMOTE'
+          set -euo pipefail
+
+          RELEASE_SHA="$1"
+          DEPLOY_PATH="$2"
+          PUBLIC_URL="$3"
+          GHCR_NAMESPACE="$4"
+          REINDEX="$5"
+
+          [[ "$RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "Invalid release SHA"; exit 1; }
+          [[ "$DEPLOY_PATH" = /* ]] || { echo "OCI_DEPLOY_PATH must be absolute"; exit 1; }
+          [[ "$GHCR_NAMESPACE" =~ ^ghcr\.io/[a-z0-9_.-]+$ ]] || { echo "Invalid GHCR namespace"; exit 1; }
+          [[ "$REINDEX" = true || "$REINDEX" = false ]] || { echo "Invalid reindex flag"; exit 1; }
+
+          trap 'sudo -n docker logout ghcr.io >/dev/null 2>&1 || true' EXIT
 
           sudo -n chown -R "$(id -u):$(id -g)" "$DEPLOY_PATH"
           cd "$DEPLOY_PATH"
-          git fetch --prune origin "$RELEASE_SHA"
+          git fetch --prune --depth=1 origin "$RELEASE_SHA"
           git reset --hard "$RELEASE_SHA"
-          git clean -fd
           test -s .env
 
-          sudo -n env AXIOM_CORS_ORIGINS="$PUBLIC_URL" docker compose -f docker-compose.yml -f docker-compose.oci.yml -f docker-compose.gateway.yml config --quiet
-          sudo -n env AXIOM_CORS_ORIGINS="$PUBLIC_URL" docker compose -f docker-compose.yml -f docker-compose.oci.yml -f docker-compose.gateway.yml up -d --build --remove-orphans
-          sudo -n env AXIOM_CORS_ORIGINS="$PUBLIC_URL" docker compose -f docker-compose.yml -f docker-compose.oci.yml -f docker-compose.gateway.yml exec -T api python -m app.main --ingest
+          export AXIOM_API_IMAGE="$GHCR_NAMESPACE/axiom-tech-api:sha-$RELEASE_SHA"
+          export AXIOM_FRONTEND_IMAGE="$GHCR_NAMESPACE/axiom-tech-frontend:sha-$RELEASE_SHA"
+
+          compose() {
+            sudo -n env \
+              AXIOM_API_IMAGE="$AXIOM_API_IMAGE" \
+              AXIOM_FRONTEND_IMAGE="$AXIOM_FRONTEND_IMAGE" \
+              AXIOM_CORS_ORIGINS="$PUBLIC_URL" \
+              docker compose \
+                -f docker-compose.yml \
+                -f docker-compose.oci.yml \
+                -f docker-compose.gateway.yml "$@"
+          }
+
+          compose config --quiet
+          compose pull --quiet
+          compose up -d --no-build --remove-orphans
+          compose ps
+
+          if [[ "$REINDEX" = true ]]; then
+            compose exec -T api python -m app.main --ingest
+          fi
 
           curl --fail --silent --show-error --connect-timeout 5 --max-time 30 --retry 10 --retry-delay 3 http://127.0.0.1:8080/api/v1/health
           REMOTE
 
       - name: Verify public URL
-        # The test VM currently exposes HTTP directly. Its OCI network rule
-        # is not public yet, so the remote health check above is authoritative
-        # for HTTP test deployments; HTTPS deployments retain the public check.
-        if: ${{ startsWith(env.PUBLIC_URL, 'https://') }}
+        if: startsWith(env.PUBLIC_URL, 'https://')
         shell: bash
         run: |
-          set -eu
+          set -euo pipefail
           curl --fail --silent --show-error --connect-timeout 10 --max-time 30 --retry 3 --retry-delay 5 "$PUBLIC_URL/api/v1/health"

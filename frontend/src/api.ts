@@ -35,6 +35,8 @@ export interface QueryResponse {
   trace: TraceEvent[];
   rewrite_count: number;
   grounded: boolean;
+  duration_ms?: number;
+  timings_ms?: Record<string, number>;
 }
 
 export interface IngestFile {
@@ -53,6 +55,25 @@ export interface IngestResponse {
   files: IngestFile[];
 }
 
+export interface SourceStatus {
+  path: string;
+  domain: string;
+  file_type: string;
+  size_bytes: number;
+  modified_at: string;
+  indexed_chunks: number;
+  expected_chunks: number;
+  status: 'indexed' | 'pending' | 'stale' | 'error' | string;
+  message?: string;
+}
+
+export interface SourcesResponse {
+  total: number;
+  indexed: number;
+  pending: number;
+  sources: SourceStatus[];
+}
+
 export interface SystemStatus {
   status: 'ok' | string;
   version: string;
@@ -61,6 +82,9 @@ export interface SystemStatus {
     collection: string;
     physical_collection?: string;
     document_count: number;
+    source_count?: number | null;
+    ready?: boolean;
+    reason?: string | null;
     embedding?: {
       provider: string;
       model?: string;
@@ -116,10 +140,15 @@ export class ApiError extends Error {
   }
 }
 
+const REQUEST_TIMEOUT_MS = 45_000;
+const MAINTENANCE_TIMEOUT_MS = 180_000;
+
 const configuredBaseUrl = import.meta.env.VITE_API_BASE_URL?.trim() ?? '';
 export const API_BASE_URL = configuredBaseUrl.replace(/\/$/, '');
 
 function getErrorMessage(payload: unknown, fallback: string): string {
+  const limit = (value: string) => value.trim().slice(0, 280);
+
   if (typeof payload === 'string' && payload.trim()) {
     const text = payload.trim();
     const looksLikeMarkup = /^\s*</.test(text) || /<\/?(?:html|body|head|script)\b/i.test(text);
@@ -131,35 +160,60 @@ function getErrorMessage(payload: unknown, fallback: string): string {
   if (payload && typeof payload === 'object') {
     const detail = (payload as { detail?: unknown }).detail;
     if (typeof detail === 'string' && detail.trim()) {
-      return detail;
+      return limit(detail);
     }
 
     const message = (payload as { message?: unknown }).message;
     if (typeof message === 'string' && message.trim()) {
-      return message;
+      return limit(message);
     }
   }
 
   return fallback;
 }
 
-async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+export function isAbortError(error: unknown): boolean {
+  return (error instanceof DOMException && error.name === 'AbortError')
+    || (error instanceof Error && error.name === 'AbortError');
+}
+
+async function request<T>(
+  path: string,
+  init: RequestInit = {},
+  timeoutMs = REQUEST_TIMEOUT_MS,
+): Promise<T> {
+  const controller = new AbortController();
+  let timedOut = false;
+  const timeoutId = window.setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, timeoutMs);
+  const forwardAbort = () => controller.abort();
+  init.signal?.addEventListener('abort', forwardAbort, { once: true });
+
   let response: Response;
 
   try {
+    const headers = new Headers(init.headers);
+    headers.set('Accept', 'application/json');
     response = await fetch(`${API_BASE_URL}${path}`, {
       ...init,
-      headers: {
-        Accept: 'application/json',
-        ...init.headers,
-      },
+      headers,
+      signal: controller.signal,
     });
   } catch (error) {
-    if (error instanceof DOMException && error.name === 'AbortError') {
+    if (timedOut) {
+      throw new ApiError('O serviço demorou mais que o esperado. Tente novamente.');
+    }
+
+    if (isAbortError(error)) {
       throw error;
     }
 
     throw new ApiError('Não foi possível alcançar o serviço de conhecimento.');
+  } finally {
+    window.clearTimeout(timeoutId);
+    init.signal?.removeEventListener('abort', forwardAbort);
   }
 
   const contentType = response.headers.get('content-type') ?? '';
@@ -193,10 +247,23 @@ export const knowledgeApi = {
       signal,
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({}),
-    });
+    }, MAINTENANCE_TIMEOUT_MS);
+  },
+
+  rebuildEmbeddings(signal?: AbortSignal) {
+    return request<IngestResponse>('/api/v1/embeddings/rebuild', {
+      method: 'POST',
+      signal,
+      headers: { 'Content-Type': 'application/json' },
+      body: '{}',
+    }, MAINTENANCE_TIMEOUT_MS);
+  },
+
+  sources(signal?: AbortSignal) {
+    return request<SourcesResponse>('/api/v1/sources', { signal, cache: 'no-store' });
   },
 
   status(signal?: AbortSignal) {
-    return request<SystemStatus>('/api/v1/status', { signal });
+    return request<SystemStatus>('/api/v1/status', { signal, cache: 'no-store' });
   },
 };

@@ -20,6 +20,10 @@ from dotenv import load_dotenv
 
 
 BASE_DIR = Path(__file__).resolve().parent.parent
+# Match the usual precedence without ever overwriting process-injected values:
+# environment > ignored .env.local > safe .env template.  Production
+# containers do not copy either local file; their environment remains final.
+load_dotenv(BASE_DIR / ".env.local")
 load_dotenv(BASE_DIR / ".env")
 
 _TRUE_VALUES = {"1", "true", "yes", "on"}
@@ -214,7 +218,7 @@ class Settings:
     # NVIDIA remains the backwards-compatible remote provider.  The model-specific
     # credentials below become active only through an explicit nvidia-* route.
     nvidia_api_key: str = field(default="", repr=False)
-    nvidia_model: str = "meta/llama-3.1-70b-instruct"
+    nvidia_model: str = "meta/muse-glimmer-30b"
     nvidia_base_url: str = "https://integrate.api.nvidia.com/v1"
     nvidia_kimi_model: str = "moonshotai/kimi-k2.6"
     nvidia_minimax_model: str = "minimaxai/minimax-m3"
@@ -230,8 +234,11 @@ class Settings:
     # Empty routes mean legacy derivation: NVIDIA+deterministic when
     # AXIOM_NVIDIA_ENABLED is true, otherwise deterministic only.
     llm_routes: Tuple[str, ...] = ()
-    llm_timeout_seconds: float = 30.0
-    llm_max_retries: int = 1
+    # The public OCI gateway has a short upstream budget.  A bounded timeout
+    # keeps the deterministic route available before the gateway itself emits
+    # a 504, while zero SDK retries avoids spending that budget twice.
+    llm_timeout_seconds: float = 8.0
+    llm_max_retries: int = 0
     llm_circuit_failure_threshold: int = 3
     llm_circuit_recovery_seconds: float = 30.0
 
@@ -255,6 +262,10 @@ class Settings:
     embedding_dimensions: int = 384
     embedding_base_url: str = "https://api.openai.com/v1"
     embedding_api_key: str = field(default="", repr=False)
+    # ``auto`` adds NVIDIA's query/passage discriminator for the Nemotron
+    # retriever models that require it; ``none`` keeps a plain OpenAI-compatible
+    # embeddings request for providers that do not use that extension.
+    embedding_input_type: str = "auto"
     embedding_timeout_seconds: float = 10.0
     embedding_batch_size: int = 64
     retrieval_candidate_multiplier: int = 4
@@ -277,6 +288,11 @@ class Settings:
         if provider not in {"disabled", "deterministic", "openai"}:
             raise ConfigurationError("AXIOM_EMBEDDING_PROVIDER is unsupported")
         object.__setattr__(self, "embedding_provider", provider)
+
+        input_type = self.embedding_input_type.strip().lower()
+        if input_type not in {"auto", "none"}:
+            raise ConfigurationError("AXIOM_EMBEDDING_INPUT_TYPE must be auto or none")
+        object.__setattr__(self, "embedding_input_type", input_type)
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -361,7 +377,7 @@ class Settings:
             nvidia_api_key=_secret(os.getenv("NVIDIA_API_KEY"), "NVIDIA_API_KEY"),
             nvidia_model=_model(
                 os.getenv("NVIDIA_MODEL"),
-                "meta/llama-3.1-70b-instruct",
+                "meta/muse-glimmer-30b",
                 "NVIDIA_MODEL",
             ),
             nvidia_base_url=_safe_https_url(
@@ -387,13 +403,13 @@ class Settings:
             llm_routes=routes,
             llm_timeout_seconds=_bounded_float(
                 os.getenv("AXIOM_LLM_TIMEOUT_SECONDS"),
-                30.0,
+                8.0,
                 1.0,
                 120.0,
                 "AXIOM_LLM_TIMEOUT_SECONDS",
             ),
             llm_max_retries=_bounded_int(
-                os.getenv("AXIOM_LLM_MAX_RETRIES"), 1, 0, 5, "AXIOM_LLM_MAX_RETRIES"
+                os.getenv("AXIOM_LLM_MAX_RETRIES"), 0, 0, 5, "AXIOM_LLM_MAX_RETRIES"
             ),
             llm_circuit_failure_threshold=_bounded_int(
                 os.getenv("AXIOM_LLM_CIRCUIT_FAILURE_THRESHOLD"),
@@ -478,6 +494,9 @@ class Settings:
             ),
             embedding_api_key=_secret(
                 os.getenv("AXIOM_EMBEDDING_API_KEY"), "AXIOM_EMBEDDING_API_KEY"
+            ),
+            embedding_input_type=(
+                os.getenv("AXIOM_EMBEDDING_INPUT_TYPE", "auto").strip().lower()
             ),
             embedding_timeout_seconds=_bounded_float(
                 os.getenv("AXIOM_EMBEDDING_TIMEOUT_SECONDS"),

@@ -3,12 +3,11 @@
 from __future__ import annotations
 
 import re
-import unicodedata
 from dataclasses import dataclass
 from typing import Iterable, List, Sequence
 
 from app.vectorstore.port import RetrievedChunk
-from app.vectorstore.retrieval import STOP_WORDS
+from app.vectorstore.retrieval import STOP_WORDS, tokenize
 
 
 MIN_LEXICAL_COVERAGE = 0.20
@@ -101,6 +100,4 @@ def meaningful_terms(value: str) -> set[str]:
 
 
 def _tokens(value: str) -> List[str]:
-    normalized = unicodedata.normalize("NFKD", value.casefold())
-    normalized = "".join(character for character in normalized if not unicodedata.combining(character))
-    return re.findall(r"[a-z0-9][a-z0-9._/-]*", normalized)
+    return tokenize(value)

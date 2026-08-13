@@ -70,6 +70,57 @@ def test_route_priority_timeout_and_retry_are_passed_to_clients(axiom_settings, 
     assert calls == [("nvidia", 12.5, 2), ("openai", 12.5, 2)]
 
 
+def test_muse_glimmer_disables_excessive_reasoning_for_grounded_synthesis(
+    axiom_settings, evidence
+) -> None:
+    configured = replace(
+        axiom_settings,
+        llm_routes=("nvidia", "deterministic"),
+        nvidia_api_key="nvidia-secret",
+        nvidia_model="meta/muse-glimmer-30b",
+    )
+    calls = []
+
+    def factory(route, timeout, max_retries):
+        class Completion:
+            def create(self, **kwargs):
+                calls.append(kwargs)
+                return SimpleNamespace(
+                    choices=[SimpleNamespace(message=SimpleNamespace(content="Grounded answer"))]
+                )
+
+        return SimpleNamespace(chat=SimpleNamespace(completions=Completion()))
+
+    result = ModelGateway(configured, client_factory=factory).synthesize(
+        "What is the RTO?", evidence
+    )
+
+    assert result.mode == "nvidia"
+    assert calls[0]["extra_body"] == {
+        "chat_template_kwargs": {"reasoning_strength": "low"}
+    }
+
+
+def test_empty_remote_response_uses_grounded_deterministic_fallback(
+    axiom_settings, evidence
+) -> None:
+    configured = replace(
+        axiom_settings,
+        llm_routes=("nvidia", "deterministic"),
+        nvidia_api_key="nvidia-secret",
+        nvidia_model="meta/muse-glimmer-30b",
+    )
+    gateway = ModelGateway(
+        configured,
+        client_factory=lambda route, timeout, retries: FakeClient(None),
+    )
+
+    result = gateway.synthesize("What is the RTO?", evidence)
+
+    assert result.mode == "deterministic"
+    assert "runbook.md" in result.answer
+
+
 def test_non_transient_provider_failure_does_not_fall_back(axiom_settings, evidence) -> None:
     configured = replace(
         axiom_settings,

@@ -17,6 +17,7 @@ from app.schemas import (
     IngestResponse,
     QueryRequest,
     QueryResponse,
+    SourcesResponse,
     StatusResponse,
 )
 from app.service import KnowledgeService, create_knowledge_service
@@ -53,7 +54,7 @@ def create_app(
     )
     def ingest(request: IngestRequest) -> dict:
         try:
-            return application.state.knowledge_service.ingest(request.path).as_dict()
+            return application.state.knowledge_service.ingest(request.path, force=request.force).as_dict()
         except FileNotFoundError as exc:
             raise HTTPException(status_code=404, detail="Ingestion target was not found") from exc
         except PermissionError as exc:
@@ -73,6 +74,30 @@ def create_app(
         except Exception as exc:
             logger.error("Query failed (%s)", type(exc).__name__)
             raise HTTPException(status_code=503, detail="Query service is temporarily unavailable") from exc
+
+    @application.get("/api/v1/sources", response_model=SourcesResponse)
+    def sources() -> dict:
+        try:
+            return application.state.knowledge_service.sources()
+        except Exception as exc:
+            logger.error("Source inventory failed (%s)", type(exc).__name__)
+            raise HTTPException(status_code=503, detail="Source inventory is temporarily unavailable") from exc
+
+    @application.post(
+        "/api/v1/embeddings/rebuild",
+        response_model=IngestResponse,
+        response_model_exclude_none=True,
+    )
+    def rebuild_embeddings() -> dict:
+        try:
+            return application.state.knowledge_service.rebuild_embeddings().as_dict()
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail="Embedding source directory was not found") from exc
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail="Embedding source is outside the configured documents directory") from exc
+        except Exception as exc:
+            logger.error("Embedding rebuild failed (%s)", type(exc).__name__)
+            raise HTTPException(status_code=503, detail="Embedding rebuild is temporarily unavailable") from exc
 
     return application
 

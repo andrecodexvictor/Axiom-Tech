@@ -100,6 +100,34 @@ def test_remote_embedding_batches_validates_and_never_falls_back() -> None:
         malformed.embed_many(["one", "two"])
 
 
+def test_nemotron_retriever_uses_passage_and_query_input_types() -> None:
+    calls = []
+
+    class FakeEmbeddings:
+        def create(self, **kwargs):
+            calls.append(kwargs)
+            return SimpleNamespace(
+                data=[
+                    SimpleNamespace(index=0, embedding=[1.0, 0.0, 0.0, 0.0])
+                    for _ in kwargs["input"]
+                ]
+            )
+
+    provider = OpenAICompatibleEmbedding(
+        api_key="test-only",
+        model="nvidia/llama-nemotron-embed-1b-v2",
+        dimensions=4,
+        base_url="https://integrate.api.nvidia.com/v1",
+        client=SimpleNamespace(embeddings=FakeEmbeddings()),
+    )
+
+    provider.embed_many(["passage"])
+    provider.embed("query")
+
+    assert calls[0]["extra_body"] == {"input_type": "passage"}
+    assert calls[1]["extra_body"] == {"input_type": "query"}
+
+
 def test_disabled_embedding_is_fail_closed_and_status_is_sanitized(axiom_settings) -> None:
     configured = replace(axiom_settings, embedding_provider="disabled")
 

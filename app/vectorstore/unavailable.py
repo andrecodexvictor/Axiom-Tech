@@ -28,7 +28,8 @@ class UnavailableVectorStore(VectorStorePort):
             "configured": False,
         }
 
-    def upsert(self, chunks: List[Dict[str, Any]]) -> UpsertResult:
+    def upsert(self, chunks: List[Dict[str, Any]], *, force: bool = False) -> UpsertResult:
+        del chunks, force
         raise RuntimeError("Vector retrieval is unavailable ({0})".format(self.reason_code))
 
     def search(
@@ -42,7 +43,11 @@ class UnavailableVectorStore(VectorStorePort):
             "collection": self.collection_name,
             "physical_collection": "",
             "document_count": 0,
+            "source_count": 0,
             "reason": self.reason_code,
             "embedding": dict(self.embedding_status),
             "retrieval": {},
         }
+
+    def source_inventory(self) -> List[Dict[str, Any]]:
+        return []

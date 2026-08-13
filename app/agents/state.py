@@ -33,3 +33,4 @@ class AgentState(TypedDict, total=False):
     messages: List[Dict[str, str]]
     grounded: bool
     synthesis_mode: str
+    timings_ms: Dict[str, float]

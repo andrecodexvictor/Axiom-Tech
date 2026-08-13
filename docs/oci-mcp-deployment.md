@@ -283,7 +283,7 @@ AXIOM_DOCUMENTS_DIR=/app/documentos
 AXIOM_CHROMA_PATH=/data/chroma
 AXIOM_VECTOR_BACKEND=chroma
 AXIOM_NVIDIA_ENABLED=true
-NVIDIA_MODEL=meta/llama-3.1-70b-instruct
+NVIDIA_MODEL=meta/muse-glimmer-30b
 NVIDIA_API_KEY=<stored-in-vault>
 AXIOM_CORS_ORIGINS=http://<public-host>:8080
 LANGSMITH_TRACING=true
@@ -296,15 +296,24 @@ LANGSMITH_HIDE_OUTPUTS=true
 
 The angle-bracket values above are placeholders only. Store real provider values in the secret, and never paste them into this file, a terminal transcript, or an MCP request. Add `LANGSMITH_WORKSPACE_ID` only when the LangSmith key requires it. Add `SERPER_API_KEY` and `AXIOM_WEB_ENABLED=true` only when the explicit web route has been approved.
 
-For the first smoke test, the repository Compose file builds both images on the VM. Mount the Block Volume at `/var/lib/axiom-data`, then use the versioned `docker-compose.oci.yml` override so ChromaDB persists at `/var/lib/axiom-data/chroma`. Do not place the Chroma index on the VM’s ephemeral boot disk.
+GitHub Actions is the only production image builder. A successful `main` CI run
+publishes AMD64/ARM64 API and frontend images to GHCR with an immutable
+`sha-<commit>` tag. Mount the Block Volume at `/var/lib/axiom-data`, then let the
+deployment workflow use `docker-compose.oci.yml` so ChromaDB persists at
+`/var/lib/axiom-data/chroma`. Do not place the Chroma index on the VM’s
+ephemeral boot disk.
 
 ```bash
+export AXIOM_API_IMAGE=ghcr.io/<owner>/axiom-tech-api:sha-<commit>
+export AXIOM_FRONTEND_IMAGE=ghcr.io/<owner>/axiom-tech-frontend:sha-<commit>
 docker compose -f docker-compose.yml -f docker-compose.oci.yml config --quiet
-docker compose -f docker-compose.yml -f docker-compose.oci.yml up -d --build
+docker compose -f docker-compose.yml -f docker-compose.oci.yml pull
+docker compose -f docker-compose.yml -f docker-compose.oci.yml up -d --no-build
 docker compose -f docker-compose.yml -f docker-compose.oci.yml ps
 ```
 
-If the release is delivered through OCIR, build and push immutable `api:<tag>` and `frontend:<tag>` images, then use a non-versioned local Compose override that references those exact image tags. Keep the registry login token in OCI Vault or the operator’s credential helper.
+The deployment workflow logs the VM into GHCR only for the pull and logs out at
+the end. No registry credential is baked into an image or committed to Git.
 
 ## 7. Ingest, verify, and record the run
 
@@ -329,7 +338,11 @@ Record the release tag, UTC timestamp, public URL, health result, ingestion coun
 
 ## 8. Rollback
 
-Keep the previous immutable release tag and the Block Volume. To roll back, check out the previous tag, rebuild or pull the matching images, and run the OCI Compose override again. Do not run `docker compose down -v` during a rollback: that deletes the local Chroma volume and its indexed data.
+Keep the previous immutable release tag and the Block Volume. To roll back,
+select the previous `sha-<commit>` images and run the OCI Compose override with
+`pull` followed by `up --no-build`. Do not rebuild on the VM and do not run
+`docker compose down -v` during a rollback: that deletes the local Chroma
+volume and its indexed data.
 
 If the endpoint is compromised or a credential may have leaked, revoke and rotate the affected key first, update the OCI Vault secret, recreate `.env` with mode `600`, and restart the API container. A LangSmith key shared outside the secret store must be considered compromised and replaced.
 

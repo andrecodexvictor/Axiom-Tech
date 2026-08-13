@@ -123,6 +123,18 @@ class DocumentLoader:
             "file_type": file_type,
             "path": str(path),
         }
+        # Keep filesystem identity alongside the content hash.  The source
+        # inventory can then detect changed files without reparsing PDFs,
+        # spreadsheets, or presentations on every status request.
+        try:
+            file_stat = path.stat()
+            metadata["size_bytes"] = int(file_stat.st_size)
+            metadata["modified_ns"] = int(file_stat.st_mtime_ns)
+        except OSError:
+            # The loader may be used with a transient fixture or virtual path;
+            # ingestion remains valid and the inventory will report that the
+            # legacy timestamp is unavailable.
+            pass
         metadata.update({key: value for key, value in location.items() if value is not None})
         normalized = cls._normalize_text(content)
         metadata["document_hash"] = hashlib.sha256(normalized.encode("utf-8")).hexdigest()

@@ -9,6 +9,7 @@ import {
   type ReactNode,
 } from 'react';
 import {
+  isAbortError,
   knowledgeApi,
   type Domain,
   type QueryRequest,
@@ -27,8 +28,10 @@ import {
   LoadingAnswer,
   LoadingEvidence,
   QueryError,
+  SourceInventoryPanel,
   StatusPanel,
   type IndexState,
+  type SourceState,
   type StatusState,
 } from './components';
 
@@ -71,11 +74,13 @@ export default function App() {
   const [announcement, setAnnouncement] = useState('Pronto para receber uma pergunta.');
   const [systemState, setSystemState] = useState<StatusState>({ phase: 'loading' });
   const [indexState, setIndexState] = useState<IndexState>({ phase: 'idle' });
+  const [sourceState, setSourceState] = useState<SourceState>({ phase: 'loading' });
 
   const questionInputRef = useRef<HTMLTextAreaElement>(null);
   const queryAbortRef = useRef<AbortController | null>(null);
   const statusAbortRef = useRef<AbortController | null>(null);
   const indexAbortRef = useRef<AbortController | null>(null);
+  const sourceAbortRef = useRef<AbortController | null>(null);
 
   const loadStatus = useCallback(async () => {
     statusAbortRef.current?.abort();
@@ -89,8 +94,27 @@ export default function App() {
         setSystemState({ phase: 'ready', data });
       }
     } catch (error) {
-      if (controller.signal.aborted) return;
+      if (controller.signal.aborted || isAbortError(error)) return;
       setSystemState((current) => ({
+        phase: 'error',
+        data: current.data,
+        error: getErrorMessage(error),
+      }));
+    }
+  }, []);
+
+  const loadSources = useCallback(async () => {
+    sourceAbortRef.current?.abort();
+    const controller = new AbortController();
+    sourceAbortRef.current = controller;
+    setSourceState((current) => ({ phase: 'loading', data: current.data }));
+
+    try {
+      const data = await knowledgeApi.sources(controller.signal);
+      if (!controller.signal.aborted) setSourceState({ phase: 'ready', data });
+    } catch (error) {
+      if (controller.signal.aborted || isAbortError(error)) return;
+      setSourceState((current) => ({
         phase: 'error',
         data: current.data,
         error: getErrorMessage(error),
@@ -100,8 +124,12 @@ export default function App() {
 
   useEffect(() => {
     void loadStatus();
-    return () => statusAbortRef.current?.abort();
-  }, [loadStatus]);
+    void loadSources();
+    return () => {
+      statusAbortRef.current?.abort();
+      sourceAbortRef.current?.abort();
+    };
+  }, [loadSources, loadStatus]);
 
   useEffect(() => {
     const focusQuestion = (event: globalThis.KeyboardEvent) => {
@@ -128,6 +156,7 @@ export default function App() {
   useEffect(() => () => {
     queryAbortRef.current?.abort();
     indexAbortRef.current?.abort();
+    sourceAbortRef.current?.abort();
   }, []);
 
   const runQuery = useCallback(async (request: QueryRequest) => {
@@ -153,7 +182,7 @@ export default function App() {
         );
       }
     } catch (error) {
-      if (controller.signal.aborted) return;
+      if (controller.signal.aborted || isAbortError(error)) return;
       const message = getErrorMessage(error);
       setQueryError(message);
       setQueryPhase('error');
@@ -199,11 +228,11 @@ export default function App() {
     questionInputRef.current?.focus();
   };
 
-  const retryLastQuery = () => {
+  const retryLastQuery = useCallback(() => {
     if (lastRequest) void runQuery(lastRequest);
-  };
+  }, [lastRequest, runQuery]);
 
-  const reindexDocuments = async () => {
+  const reindexDocuments = useCallback(async () => {
     indexAbortRef.current?.abort();
     const controller = new AbortController();
     indexAbortRef.current = controller;
@@ -214,11 +243,30 @@ export default function App() {
       if (controller.signal.aborted) return;
       setIndexState({ phase: 'success', message: formatIngestMessage(result) });
       void loadStatus();
+      void loadSources();
     } catch (error) {
-      if (controller.signal.aborted) return;
+      if (controller.signal.aborted || isAbortError(error)) return;
       setIndexState({ phase: 'error', message: getErrorMessage(error) });
     }
-  };
+  }, [loadSources, loadStatus]);
+
+  const rebuildEmbeddings = useCallback(async () => {
+    indexAbortRef.current?.abort();
+    const controller = new AbortController();
+    indexAbortRef.current = controller;
+    setIndexState({ phase: 'loading', message: 'Recalculando os vetores do corpus…' });
+
+    try {
+      const result = await knowledgeApi.rebuildEmbeddings(controller.signal);
+      if (controller.signal.aborted) return;
+      setIndexState({ phase: 'success', message: `Embeddings recalculados: ${formatIngestMessage(result)}` });
+      void loadStatus();
+      void loadSources();
+    } catch (error) {
+      if (controller.signal.aborted || isAbortError(error)) return;
+      setIndexState({ phase: 'error', message: getErrorMessage(error) });
+    }
+  }, [loadSources, loadStatus]);
 
   let answerContent: ReactNode = <EmptyAnswer />;
   let evidenceContent: ReactNode = <EvidenceGuide />;
@@ -385,9 +433,11 @@ export default function App() {
             <StatusPanel
               state={systemState}
               indexState={indexState}
-              onRefresh={() => void loadStatus()}
-              onReindex={() => void reindexDocuments()}
+              onRefresh={loadStatus}
+              onReindex={reindexDocuments}
+              onRebuildEmbeddings={rebuildEmbeddings}
             />
+            <SourceInventoryPanel state={sourceState} onRefresh={loadSources} />
           </aside>
         </div>
 
