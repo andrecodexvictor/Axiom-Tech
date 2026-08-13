@@ -120,19 +120,36 @@ jobs:
           export AXIOM_API_IMAGE="$GHCR_NAMESPACE/axiom-tech-api:sha-$RELEASE_SHA"
           export AXIOM_FRONTEND_IMAGE="$GHCR_NAMESPACE/axiom-tech-frontend:sha-$RELEASE_SHA"
 
-          compose() {
+          compose_for_project() {
+            local project_name="$1"
+            shift
             sudo -n env \
               AXIOM_API_IMAGE="$AXIOM_API_IMAGE" \
               AXIOM_FRONTEND_IMAGE="$AXIOM_FRONTEND_IMAGE" \
               AXIOM_CORS_ORIGINS="$PUBLIC_URL" \
               docker compose \
+                --project-name "$project_name" \
                 -f docker-compose.yml \
                 -f docker-compose.oci.yml \
                 -f docker-compose.gateway.yml "$@"
           }
 
+          compose() {
+            compose_for_project axiom "$@"
+          }
+
           compose config --quiet
           compose pull --quiet
+
+          # A previous workflow briefly inferred the repository directory name as
+          # the Compose project. Remove only that partial stack before replacing
+          # the established `axiom` deployment; persistent volumes are preserved.
+          if sudo -n docker ps -a \
+            --filter label=com.docker.compose.project=axiom-tech \
+            --format '{{.ID}}' | grep -q .; then
+            compose_for_project axiom-tech down --remove-orphans
+          fi
+
           compose up -d --no-build --remove-orphans
           compose ps
 
