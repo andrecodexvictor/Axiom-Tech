@@ -150,14 +150,14 @@ jobs:
             compose_for_project axiom-tech down --remove-orphans
           fi
 
-          compose up -d --no-build --remove-orphans
+          compose up -d --no-build --remove-orphans --wait --wait-timeout 90
           compose ps
 
           if [[ "$REINDEX" = true ]]; then
             compose exec -T api python -m app.main --ingest
           fi
 
-          curl --fail --silent --show-error --connect-timeout 5 --max-time 30 --retry 10 --retry-delay 3 http://127.0.0.1:8080/api/v1/health
+          curl --fail --silent --show-error --connect-timeout 5 --max-time 30 --retry 10 --retry-connrefused --retry-delay 3 http://127.0.0.1:8080/api/v1/health
           REMOTE
 
       - name: Verify public URL
