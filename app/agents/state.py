@@ -16,12 +16,15 @@ class AgentState(TypedDict, total=False):
     requested_domain: Optional[str]
     active_question: str
     top_k: int
+    retrieval_domain: Optional[str]
     domain: str
     classified_domain: str  # Retained for V1 CLI compatibility.
     specialist: str
     next_agent: str  # Retained for V1 CLI compatibility.
     retrieved_docs: List[Any]
     grade_status: str
+    evidence_coverage: float
+    best_relevance_score: float
     rewrite_count: int
     final_answer: str
     sources: List[str]

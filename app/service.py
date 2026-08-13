@@ -10,7 +10,7 @@ from app.config import Settings, settings
 from app.graph import AxiomAgentGraph
 from app.ingestion.chunker import DocumentChunker
 from app.ingestion.loader import DocumentLoader
-from app.llm_client import NvidiaGateway
+from app.llm_client import ModelGateway
 from app.vectorstore.factory import create_vector_store
 from app.vectorstore.port import UpsertResult, VectorStorePort
 
@@ -62,7 +62,7 @@ class KnowledgeService:
         self,
         configuration: Settings,
         vector_store: VectorStorePort,
-        model_gateway: NvidiaGateway,
+        model_gateway: ModelGateway,
     ) -> None:
         self.configuration = configuration
         self.vector_store = vector_store
@@ -75,7 +75,9 @@ class KnowledgeService:
         report = IngestReport()
         for file_path in DocumentLoader.iter_supported_files(target):
             try:
-                documents = DocumentLoader.load_file(file_path)
+                documents = DocumentLoader.load_file(
+                    file_path, source_root=self.configuration.documents_dir
+                )
                 chunks = self.chunker.split_documents(documents)
                 if not chunks:
                     report.skipped += 1
@@ -109,16 +111,35 @@ class KnowledgeService:
 
     def status(self) -> Dict[str, Any]:
         store = self.vector_store.status()
+        embedding = dict(store.get("embedding", {}) or {})
+        retrieval = dict(store.get("retrieval", {}) or {})
         return {
             "status": "ok" if store.get("backend") == "chroma" else "degraded",
             "version": "3.0.0",
             "vector_store": {
                 "backend": store.get("backend", "unknown"),
                 "collection": store.get("collection", ""),
+                "physical_collection": store.get("physical_collection") or None,
                 "document_count": int(store.get("document_count", 0)),
+                "embedding": {
+                    "provider": str(embedding.get("provider", "unavailable")),
+                    "model": str(embedding.get("model", "")) or None,
+                    "dimensions": int(embedding.get("dimensions", 0)),
+                    "fingerprint": str(embedding.get("fingerprint", "")),
+                    "mode": str(embedding.get("mode", "disabled")),
+                    "configured": bool(embedding.get("configured", False)),
+                },
+                "retrieval": {
+                    "strategy": str(retrieval.get("strategy", "unavailable")),
+                    "candidate_multiplier": int(retrieval.get("candidate_multiplier", 0)),
+                    "min_score": float(retrieval.get("min_score", 0.0)),
+                    "lexical_weight": float(retrieval.get("lexical_weight", 0.0)),
+                    "mmr_lambda": float(retrieval.get("mmr_lambda", 0.0)),
+                },
             },
             "models": self.model_gateway.status(),
-            "documents_dir": str(self.configuration.documents_dir),
+            # Status reports a logical label, never an absolute host path.
+            "documents_dir": self.configuration.documents_dir.name or "configured",
             "web_research": {
                 "enabled": self.configuration.web_enabled,
                 "configured": self.configuration.web_search_configured,
@@ -169,5 +190,5 @@ class KnowledgeService:
 
 def create_knowledge_service(configuration: Settings = settings) -> KnowledgeService:
     store = create_vector_store(configuration)
-    gateway = NvidiaGateway(configuration)
+    gateway = ModelGateway(configuration)
     return KnowledgeService(configuration, store, gateway)

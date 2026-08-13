@@ -1,11 +1,16 @@
-"""Small offline fallback used only if Chroma cannot be imported/started."""
+"""Non-persistent fallback that preserves the configured embedding contract."""
 
 from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-from app.vectorstore.deterministic import DeterministicEmbedding
+from app.vectorstore.embedding import EmbeddingPort, cosine_similarity
 from app.vectorstore.port import RetrievedChunk, UpsertResult, VectorStorePort
+from app.vectorstore.retrieval import (
+    RetrievalCandidate,
+    RetrievalPolicy,
+    rerank_candidates,
+)
 
 
 class InMemoryVectorStore(VectorStorePort):
@@ -13,31 +18,46 @@ class InMemoryVectorStore(VectorStorePort):
 
     backend_name = "memory-fallback"
 
-    def __init__(self, reason: str = "Chroma unavailable") -> None:
+    def __init__(
+        self,
+        embedding: EmbeddingPort,
+        retrieval_policy: RetrievalPolicy,
+        reason: str = "Chroma unavailable",
+    ) -> None:
         self.reason = reason
-        self.embedding = DeterministicEmbedding()
+        self.embedding = embedding
+        self.retrieval_policy = retrieval_policy
         self._chunks: Dict[str, Dict[str, Any]] = {}
 
     def upsert(self, chunks: List[Dict[str, Any]]) -> UpsertResult:
+        normalized = [self._normalize_chunk(chunk) for chunk in chunks]
         inserted = updated = unchanged = 0
         source_to_current: Dict[str, set[str]] = {}
-        for chunk in chunks:
-            identifier = str(chunk.get("id") or chunk.get("metadata", {}).get("chunk_id") or "")
-            content = str(chunk.get("content", "")).strip()
-            if not identifier or not content:
-                continue
-            metadata = dict(chunk.get("metadata", {}))
+        to_write: List[Dict[str, Any]] = []
+        for chunk in normalized:
+            identifier = chunk["id"]
+            content = chunk["content"]
+            metadata = chunk["metadata"]
             source_to_current.setdefault(str(metadata.get("source_key", "")), set()).add(identifier)
-            candidate = {"content": content, "metadata": metadata, "embedding": self.embedding.embed(content)}
             prior = self._chunks.get(identifier)
             if prior is None:
                 inserted += 1
-                self._chunks[identifier] = candidate
+                to_write.append(chunk)
             elif prior["content"] == content and prior["metadata"] == metadata:
                 unchanged += 1
             else:
                 updated += 1
-                self._chunks[identifier] = candidate
+                to_write.append(chunk)
+        if to_write:
+            embeddings = self.embedding.embed_many(item["content"] for item in to_write)
+            if len(embeddings) != len(to_write):
+                raise RuntimeError("Embedding provider returned an incomplete upsert batch")
+            for chunk, embedding in zip(to_write, embeddings):
+                self._chunks[chunk["id"]] = {
+                    "content": chunk["content"],
+                    "metadata": chunk["metadata"],
+                    "embedding": embedding,
+                }
         removed = 0
         for source, current_ids in source_to_current.items():
             if source:
@@ -49,28 +69,60 @@ class InMemoryVectorStore(VectorStorePort):
                 for identifier in stale:
                     del self._chunks[identifier]
                 removed += len(stale)
-        return UpsertResult(len(chunks), inserted, updated, unchanged, removed)
+        return UpsertResult(len(normalized), inserted, updated, unchanged, removed)
 
     def search(
         self, query: str, domain: Optional[str] = None, limit: int = 4
     ) -> List[RetrievedChunk]:
+        if not query.strip():
+            return []
         query_embedding = self.embedding.embed(query)
-        matches = []
+        matches: List[RetrievalCandidate] = []
         for identifier, chunk in self._chunks.items():
             metadata = chunk["metadata"]
             if domain and metadata.get("domain") != domain:
                 continue
-            score = self.embedding.similarity(query_embedding, chunk["embedding"])
-            if score > 0:
+            score = cosine_similarity(query_embedding, chunk["embedding"])
+            if score > 0.0:
                 matches.append(
-                    RetrievedChunk(identifier, chunk["content"], dict(metadata), max(0.0, min(1.0, score)))
+                    RetrievalCandidate(
+                        RetrievedChunk(
+                            identifier,
+                            chunk["content"],
+                            dict(metadata),
+                            max(0.0, min(1.0, score)),
+                        ),
+                        embedding=chunk["embedding"],
+                    )
                 )
-        return sorted(matches, key=lambda result: (-result.score, result.id))[: max(1, int(limit))]
+        candidates = sorted(
+            matches,
+            key=lambda candidate: (-candidate.chunk.score, candidate.chunk.id),
+        )[: self.retrieval_policy.candidate_limit(limit)]
+        return rerank_candidates(
+            query,
+            candidates,
+            limit=max(1, int(limit)),
+            policy=self.retrieval_policy,
+        )
 
     def status(self) -> Dict[str, Any]:
         return {
             "backend": self.backend_name,
             "collection": "in-memory",
+            "physical_collection": "in-memory",
             "document_count": len(self._chunks),
             "reason": self.reason,
+            "embedding": self.embedding.status(),
+            "retrieval": self.retrieval_policy.status(),
         }
+
+    @staticmethod
+    def _normalize_chunk(chunk: Dict[str, Any]) -> Dict[str, Any]:
+        identifier = str(chunk.get("id") or chunk.get("metadata", {}).get("chunk_id") or "")
+        content = str(chunk.get("content", "")).strip()
+        if not identifier or not content:
+            raise ValueError("Each vector chunk needs a stable id and non-empty content")
+        metadata = dict(chunk.get("metadata", {}))
+        metadata.setdefault("chunk_id", identifier)
+        return {"id": identifier, "content": content, "metadata": metadata}

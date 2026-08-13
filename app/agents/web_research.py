@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import ipaddress
 import re
+import socket
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 from urllib.parse import urljoin, urlsplit, urlunsplit
@@ -60,9 +61,11 @@ class WebResearchAgent:
         self,
         configuration: Settings = settings,
         client_factory: Optional[Callable[[], httpx.Client]] = None,
+        resolver: Optional[Callable[[str], Sequence[str]]] = None,
     ) -> None:
         self.configuration = configuration
         self._client_factory = client_factory or self._default_client
+        self._resolver = resolver or self._resolve_host
 
     def _default_client(self) -> httpx.Client:
         return httpx.Client(
@@ -136,6 +139,15 @@ class WebResearchAgent:
             )
 
         answer, citations = self._synthesize(question, evaluated)
+        if not citations:
+            trace.append(
+                self._trace(
+                    "refine_synthesize",
+                    "unsupported",
+                    "Verified pages did not yield a citable excerpt",
+                )
+            )
+            return WebResearchResult(answer=answer, citations=[], trace=trace, grounded=False)
         trace.append(
             self._trace(
                 "refine_synthesize",
@@ -210,10 +222,11 @@ class WebResearchAgent:
         return WebResearchResult(answer=reason, citations=[], trace=trace, grounded=False)
 
     def _search(self, client: httpx.Client, question: str, limit: int) -> List[SearchCandidate]:
+        accepted_limit = max(1, min(int(limit), 10))
         response = client.post(
             SERPER_SEARCH_URL,
             headers={"X-API-KEY": self.configuration.serper_api_key, "Content-Type": "application/json"},
-            json={"q": question, "num": max(1, min(int(limit), 10))},
+            json={"q": question, "num": accepted_limit},
         )
         content = self._response_bytes(response)
         response.raise_for_status()
@@ -221,19 +234,26 @@ class WebResearchAgent:
         if not isinstance(payload, dict):
             return []
         candidates = []
+        seen_urls = set()
         for item in payload.get("organic", []):
             if not isinstance(item, dict):
                 continue
             url = str(item.get("link", "")).strip()
             if not self.is_allowed_url(url):
                 continue
+            canonical = self._canonical_url(url)
+            if canonical in seen_urls:
+                continue
+            seen_urls.add(canonical)
             candidates.append(
                 SearchCandidate(
                     title=str(item.get("title", "")).strip() or self._host_for_url(url),
-                    url=self._canonical_url(url),
+                    url=canonical,
                     snippet=str(item.get("snippet", "")).strip(),
                 )
             )
+            if len(candidates) >= accepted_limit:
+                break
         return candidates
 
     def _fetch_candidates(
@@ -261,22 +281,30 @@ class WebResearchAgent:
         for _ in range(MAX_REDIRECTS + 1):
             if not self.is_allowed_url(current):
                 raise UnsafeWebUrl("URL is outside the web allowlist")
-            response = client.get(current, headers={"User-Agent": USER_AGENT}, follow_redirects=False)
-            if response.status_code in {301, 302, 303, 307, 308}:
-                location = response.headers.get("location")
-                if not location:
-                    raise ValueError("Redirect response had no location")
-                next_url = self._canonical_url(urljoin(current, location))
-                # Validate before following the redirect; never hand the HTTP
-                # client an off-allowlist redirect destination.
-                if not self.is_allowed_url(next_url):
-                    raise UnsafeWebUrl("Redirect URL is outside the web allowlist")
-                current = next_url
-                continue
-            content = self._response_bytes(response)
-            response.raise_for_status()
-            content_type = response.headers.get("content-type", "").split(";", 1)[0].strip().lower()
-            return current, content_type, content
+            self._assert_public_resolution(current)
+            with client.stream(
+                "GET", current, headers={"User-Agent": USER_AGENT}, follow_redirects=False
+            ) as response:
+                if response.status_code in {301, 302, 303, 307, 308}:
+                    location = response.headers.get("location")
+                    if not location:
+                        raise ValueError("Redirect response had no location")
+                    next_url = self._canonical_url(urljoin(current, location))
+                    # Validate before following the redirect; never hand the HTTP
+                    # client an off-allowlist redirect destination.
+                    if not self.is_allowed_url(next_url):
+                        raise UnsafeWebUrl("Redirect URL is outside the web allowlist")
+                    current = next_url
+                    continue
+                response.raise_for_status()
+                content = self._stream_response_bytes(response)
+                content_type = (
+                    response.headers.get("content-type", "")
+                    .split(";", 1)[0]
+                    .strip()
+                    .lower()
+                )
+                return current, content_type, content
         raise ValueError("Too many redirects")
 
     def _response_bytes(self, response: httpx.Response) -> bytes:
@@ -294,6 +322,45 @@ class WebResearchAgent:
         if len(content) > self.configuration.web_max_response_bytes:
             raise ValueError("Response exceeded configured size cap")
         return content
+
+    def _stream_response_bytes(self, response: httpx.Response) -> bytes:
+        header = response.headers.get("content-length")
+        if header:
+            try:
+                declared_size = int(header)
+            except ValueError:
+                # Invalid size metadata is not trusted; the running cap below
+                # remains authoritative.
+                declared_size = 0
+            if declared_size > self.configuration.web_max_response_bytes:
+                raise ValueError("Response exceeded configured size cap")
+        content = bytearray()
+        for block in response.iter_bytes():
+            content.extend(block)
+            if len(content) > self.configuration.web_max_response_bytes:
+                raise ValueError("Response exceeded configured size cap")
+        return bytes(content)
+
+    def _assert_public_resolution(self, value: str) -> None:
+        host = self._host_for_url(value)
+        try:
+            addresses = list(self._resolver(host))
+        except (OSError, ValueError, UnicodeError) as exc:
+            raise UnsafeWebUrl("Allowed host could not be resolved safely") from exc
+        if not addresses:
+            raise UnsafeWebUrl("Allowed host had no resolved address")
+        for address in addresses:
+            try:
+                parsed = ipaddress.ip_address(address)
+            except ValueError as exc:
+                raise UnsafeWebUrl("Resolver returned an invalid address") from exc
+            if not parsed.is_global:
+                raise UnsafeWebUrl("Allowed host resolved to a non-public address")
+
+    @staticmethod
+    def _resolve_host(host: str) -> Sequence[str]:
+        values = socket.getaddrinfo(host, 443, type=socket.SOCK_STREAM)
+        return tuple(dict.fromkeys(str(item[4][0]) for item in values))
 
     def _evaluate(self, question: str, pages: Sequence[EvaluatedPage]) -> List[EvaluatedPage]:
         terms = self._meaningful_terms(question)

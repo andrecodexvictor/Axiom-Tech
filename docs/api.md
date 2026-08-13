@@ -8,7 +8,7 @@ This is the V3 integration contract for the FastAPI boundary. It is intentionall
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| GET | /api/v1/health | Liveness/readiness check suitable for a container probe. |
+| GET | /api/v1/health | Cheap process-liveness check suitable for a container probe; it does not call providers. |
 | GET | /api/v1/status | Safe runtime status, such as selected local/optional providers and observability state. |
 | POST | /api/v1/query | Run the grounded query workflow. |
 | POST | /api/v1/ingest | Explicitly index the configured internal corpus. |
@@ -58,7 +58,77 @@ The response is typed JSON. Its stable concepts are an answer, selected domain/s
 
 The optional query domain is one of rh, juridico, engenharia, api_spec, or web; top_k is between 1 and 10. The `web` domain is explicit and fail-closed: it makes no outbound request unless web research, a Serper credential, and an HTTPS hostname allowlist are all configured. Internal citations may carry page, slide, sheet, and a corpus-relative path; verified external citations carry a URL. Clients must tolerate an empty citation array and missing optional locators. The trace contains execution metadata only; it is not a model chain-of-thought.
 
-`GET /api/v1/status` includes an `observability` object with the LangSmith provider, boolean `enabled`/`configured` state, the configured project name, and whether trace inputs/outputs are hidden. It never returns an API key, credential, or source-document payload.
+## Status
+
+`GET /api/v1/status` reports the selected runtime contracts without making a
+billable provider call. A representative response is:
+
+~~~json
+{
+  "status": "ok",
+  "version": "3.0.0",
+  "vector_store": {
+    "backend": "chroma",
+    "collection": "axiom_knowledge",
+    "physical_collection": "axiom_knowledge-371ca113a490",
+    "document_count": 20,
+    "embedding": {
+      "provider": "deterministic",
+      "model": "axiom-hashing-v2",
+      "dimensions": 384,
+      "fingerprint": "<sha256-vector-space-fingerprint>",
+      "mode": "test-development",
+      "configured": true
+    },
+    "retrieval": {
+      "strategy": "vector-candidates+lexical-rerank+mmr",
+      "candidate_multiplier": 4,
+      "min_score": 0.12,
+      "lexical_weight": 0.25,
+      "mmr_lambda": 0.75
+    }
+  },
+  "models": {
+    "gateway": "deterministic",
+    "remote_enabled": false,
+    "model": null,
+    "fallback": "none",
+    "routes": [
+      {
+        "name": "deterministic",
+        "provider": "deterministic",
+        "model": null,
+        "configured": true,
+        "circuit_state": "closed"
+      }
+    ]
+  },
+  "documents_dir": "documentos",
+  "web_research": {
+    "enabled": false,
+    "configured": false,
+    "allowlist_hosts": 0
+  },
+  "observability": {
+    "provider": "langsmith",
+    "enabled": false,
+    "configured": false,
+    "project": "axiom-tech-v3",
+    "inputs_hidden": true,
+    "outputs_hidden": true
+  }
+}
+~~~
+
+`status=degraded` means the API process is alive but the configured retrieval
+backend is not the persistent Chroma adapter. Changing an embedding provider,
+model, dimension, implementation endpoint, or normalization contract selects a
+new physical collection and requires explicit ingestion.
+
+The response never returns an API key, endpoint, absolute corpus path,
+source-document payload, provider response, or exception message. Model route
+entries expose only their name/provider/model, configured state, and in-process
+circuit state.
 
 If evidence is inadequate, the API returns a clear non-hallucinated limitation, an empty citation array, grounded=false, and trace metadata showing the fallback outcome. It must not manufacture citations to make the response look complete.
 

@@ -2,7 +2,9 @@
 
 ## Status
 
-LangGraph automatically emits traces when LangSmith tracing is explicitly enabled. The NVIDIA-compatible OpenAI client is also wrapped with the LangSmith OpenAI integration so a remote synthesis call appears as a nested model span. Deterministic local execution remains available when tracing or provider credentials are absent.
+LangGraph emits traces only when LangSmith tracing is explicitly enabled. The graph creates a configured LangSmith client per application configuration and enters a tracing context around the bounded workflow. The OpenAI-compatible model client is also wrapped so a remote synthesis call appears as a nested model span. Deterministic local execution remains available when tracing or provider credentials are absent.
+
+Only operational tags and metadata are added by the graph: workflow version, requested-domain label, `top_k`, vector backend, and embedding fingerprint. Questions, retrieved chunks, answers, prompts, endpoints, and credentials are not added to custom metadata.
 
 ## Runtime configuration
 
@@ -39,11 +41,11 @@ The application accepts the older `LANGCHAIN_TRACING_V2`, `LANGCHAIN_API_KEY`, `
 }
 ```
 
-The API never returns the LangSmith key or any other provider credential.
+The API never returns the LangSmith key or any other provider credential. Vector status similarly exposes only provider/model/dimension/fingerprint plus retrieval strategy/thresholds; it omits the embedding endpoint, credential, persistence path, provider response, and document text.
 
 ## Privacy baseline
 
-LangSmith can capture graph state and model prompts. This project defaults `LANGSMITH_HIDE_INPUTS=true` and `LANGSMITH_HIDE_OUTPUTS=true` in the Compose template so the first production deployment records timing, graph structure, errors, and metadata without sending question/document payloads by default. Change those flags only after the data owner has approved the retention, residency, and access model.
+LangSmith can capture graph state and model prompts. This project defaults `LANGSMITH_HIDE_INPUTS=true` and `LANGSMITH_HIDE_OUTPUTS=true`; the programmatic client replaces those payloads with empty objects before transmission. The first production deployment therefore records timing, graph structure, errors, and sanitized metadata without sending question/document payloads by default. Change those flags only after the data owner has approved the retention, residency, and access model.
 
 Do not place credentials in a question, trace tag, status response, log message, screenshot, or MCP argument. Use a workspace-scoped service key with an expiration/rotation policy where the LangSmith plan supports it.
 

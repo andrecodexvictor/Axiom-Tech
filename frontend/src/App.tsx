@@ -3,6 +3,7 @@ import {
   useEffect,
   useRef,
   useState,
+  type ChangeEvent,
   type FormEvent,
   type KeyboardEvent,
   type ReactNode,
@@ -16,42 +17,65 @@ import {
 import {
   AnswerPanel,
   EmptyAnswer,
+  EvidenceGuide,
+  EvidencePanel,
+  formatDomain,
   formatIngestMessage,
   getErrorMessage,
+  getSystemSummary,
   Icon,
   LoadingAnswer,
-  NavigationContent,
+  LoadingEvidence,
   QueryError,
-  StatusRail,
+  StatusPanel,
   type IndexState,
   type StatusState,
 } from './components';
 
 type RequestPhase = 'idle' | 'loading' | 'success' | 'error';
 
-const suggestions: Array<{ question: string; domain: Domain }> = [
-  { question: 'Como proceder em um incidente de severidade SEV-1?', domain: 'engenharia' },
-  { question: 'Qual é a política de home office e vale-refeição?', domain: 'rh' },
-  { question: 'Quais são os direitos dos titulares segundo a política de LGPD?', domain: 'juridico' },
-  { question: 'Como a API interna descreve autenticação e limites de uso?', domain: 'api_spec' },
+const MAX_QUESTION_LENGTH = 4000;
+
+const suggestions: Array<{ question: string; domain: Domain; label: string }> = [
+  {
+    question: 'Como proceder em um incidente de severidade SEV-1?',
+    domain: 'engenharia',
+    label: 'Engenharia',
+  },
+  {
+    question: 'Qual é a política de home office e vale-refeição?',
+    domain: 'rh',
+    label: 'Pessoas',
+  },
+  {
+    question: 'Quais são os direitos dos titulares segundo a política de LGPD?',
+    domain: 'juridico',
+    label: 'Jurídico',
+  },
+  {
+    question: 'Como a API interna descreve autenticação e limites de uso?',
+    domain: 'api_spec',
+    label: 'APIs',
+  },
 ];
 
 export default function App() {
   const [question, setQuestion] = useState('');
   const [domain, setDomain] = useState<Domain | ''>('');
   const [topK, setTopK] = useState(4);
+  const [validationError, setValidationError] = useState<string | null>(null);
   const [queryPhase, setQueryPhase] = useState<RequestPhase>('idle');
   const [response, setResponse] = useState<QueryResponse | null>(null);
   const [queryError, setQueryError] = useState<string | null>(null);
   const [lastRequest, setLastRequest] = useState<QueryRequest | null>(null);
+  const [announcement, setAnnouncement] = useState('Pronto para receber uma pergunta.');
   const [systemState, setSystemState] = useState<StatusState>({ phase: 'loading' });
   const [indexState, setIndexState] = useState<IndexState>({ phase: 'idle' });
-  const [mobileNavigationOpen, setMobileNavigationOpen] = useState(false);
 
   const questionInputRef = useRef<HTMLTextAreaElement>(null);
-  const navigationDialogRef = useRef<HTMLDialogElement>(null);
   const queryAbortRef = useRef<AbortController | null>(null);
   const statusAbortRef = useRef<AbortController | null>(null);
+  const indexAbortRef = useRef<AbortController | null>(null);
 
   const loadStatus = useCallback(async () => {
     statusAbortRef.current?.abort();
@@ -66,7 +90,11 @@ export default function App() {
       }
     } catch (error) {
       if (controller.signal.aborted) return;
-      setSystemState((current) => ({ phase: 'error', data: current.data, error: getErrorMessage(error) }));
+      setSystemState((current) => ({
+        phase: 'error',
+        data: current.data,
+        error: getErrorMessage(error),
+      }));
     }
   }, []);
 
@@ -76,7 +104,7 @@ export default function App() {
   }, [loadStatus]);
 
   useEffect(() => {
-    const focusSearchWithShortcut = (event: globalThis.KeyboardEvent) => {
+    const focusQuestion = (event: globalThis.KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
       const isTyping = target?.matches('input, textarea, select, [contenteditable="true"]');
       if (event.key === '/' && !isTyping) {
@@ -85,18 +113,21 @@ export default function App() {
       }
     };
 
-    window.addEventListener('keydown', focusSearchWithShortcut);
-    return () => window.removeEventListener('keydown', focusSearchWithShortcut);
+    window.addEventListener('keydown', focusQuestion);
+    return () => window.removeEventListener('keydown', focusQuestion);
   }, []);
 
   useEffect(() => {
-    const closeOnDesktop = () => {
-      const dialog = navigationDialogRef.current;
-      if (window.innerWidth >= 960 && dialog?.open) dialog.close();
-    };
+    if (queryPhase !== 'success' && queryPhase !== 'error') return;
 
-    window.addEventListener('resize', closeOnDesktop);
-    return () => window.removeEventListener('resize', closeOnDesktop);
+    const targetId = queryPhase === 'success' ? 'answer-heading' : 'query-error-heading';
+    const frame = window.requestAnimationFrame(() => document.getElementById(targetId)?.focus());
+    return () => window.cancelAnimationFrame(frame);
+  }, [queryPhase]);
+
+  useEffect(() => () => {
+    queryAbortRef.current?.abort();
+    indexAbortRef.current?.abort();
   }, []);
 
   const runQuery = useCallback(async (request: QueryRequest) => {
@@ -106,28 +137,34 @@ export default function App() {
     setLastRequest(request);
     setQueryPhase('loading');
     setQueryError(null);
+    setValidationError(null);
     setResponse(null);
+    setAnnouncement('Consulta iniciada. Buscando evidências na base corporativa.');
 
     try {
       const nextResponse = await knowledgeApi.query(request, controller.signal);
       if (!controller.signal.aborted) {
         setResponse(nextResponse);
         setQueryPhase('success');
+        setAnnouncement(
+          nextResponse.grounded && nextResponse.citations.length > 0
+            ? `Resposta pronta com ${nextResponse.citations.length} ${nextResponse.citations.length === 1 ? 'fonte' : 'fontes'}.`
+            : 'Resposta pronta, mas sem evidência suficiente para confirmação.',
+        );
       }
     } catch (error) {
       if (controller.signal.aborted) return;
-      setQueryError(getErrorMessage(error));
+      const message = getErrorMessage(error);
+      setQueryError(message);
       setQueryPhase('error');
+      setAnnouncement(`A consulta falhou. ${message}`);
     }
   }, []);
-
-  useEffect(() => () => queryAbortRef.current?.abort(), []);
 
   const submitCurrentQuestion = useCallback(() => {
     const trimmedQuestion = question.trim();
     if (!trimmedQuestion) {
-      setQueryError('Escreva uma pergunta para consultar a base corporativa.');
-      setQueryPhase('error');
+      setValidationError('Escreva uma pergunta antes de consultar a base.');
       questionInputRef.current?.focus();
       return;
     }
@@ -140,8 +177,13 @@ export default function App() {
     submitCurrentQuestion();
   };
 
+  const handleQuestionChange = (event: ChangeEvent<HTMLTextAreaElement>) => {
+    setQuestion(event.target.value);
+    if (validationError) setValidationError(null);
+  };
+
   const handleQuestionKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
-    if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
+    if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
       event.preventDefault();
       submitCurrentQuestion();
     }
@@ -150,7 +192,9 @@ export default function App() {
   const chooseSuggestion = (suggestion: typeof suggestions[number]) => {
     setQuestion(suggestion.question);
     setDomain(suggestion.domain);
+    setValidationError(null);
     setQueryError(null);
+    setResponse(null);
     setQueryPhase('idle');
     questionInputRef.current?.focus();
   };
@@ -160,136 +204,200 @@ export default function App() {
   };
 
   const reindexDocuments = async () => {
-    setIndexState({ phase: 'loading' });
+    indexAbortRef.current?.abort();
+    const controller = new AbortController();
+    indexAbortRef.current = controller;
+    setIndexState({ phase: 'loading', message: 'Relendo os documentos configurados…' });
+
     try {
-      const result = await knowledgeApi.ingest();
+      const result = await knowledgeApi.ingest(controller.signal);
+      if (controller.signal.aborted) return;
       setIndexState({ phase: 'success', message: formatIngestMessage(result) });
       void loadStatus();
     } catch (error) {
+      if (controller.signal.aborted) return;
       setIndexState({ phase: 'error', message: getErrorMessage(error) });
     }
   };
 
-  const openMobileNavigation = () => {
-    const dialog = navigationDialogRef.current;
-    if (dialog && !dialog.open) {
-      dialog.showModal();
-      setMobileNavigationOpen(true);
-    }
-  };
-
-  const closeMobileNavigation = () => {
-    const dialog = navigationDialogRef.current;
-    if (dialog?.open) dialog.close();
-    setMobileNavigationOpen(false);
-  };
-
   let answerContent: ReactNode = <EmptyAnswer />;
+  let evidenceContent: ReactNode = <EvidenceGuide />;
+
   if (queryPhase === 'loading') {
     answerContent = <LoadingAnswer />;
+    evidenceContent = <LoadingEvidence />;
   } else if (queryPhase === 'error') {
-    answerContent = <QueryError error={queryError ?? 'Não foi possível concluir a consulta.'} onRetry={lastRequest ? retryLastQuery : undefined} />;
+    answerContent = (
+      <QueryError
+        error={queryError ?? 'Não foi possível concluir a consulta.'}
+        onRetry={lastRequest ? retryLastQuery : undefined}
+      />
+    );
   } else if (response && lastRequest) {
     answerContent = <AnswerPanel response={response} question={lastRequest.question} />;
+    evidenceContent = <EvidencePanel response={response} />;
   }
+
+  const systemSummary = getSystemSummary(systemState);
+  const showSuggestions = queryPhase === 'idle' && !response;
+  const queryDescriptionIds = [
+    'query-help',
+    validationError ? 'question-error' : '',
+    domain === 'web' ? 'web-research-note' : '',
+  ].filter(Boolean).join(' ');
 
   return (
     <div className="app-shell">
       <a className="skip-link" href="#main-content">Pular para o conteúdo</a>
 
-      <aside className="desktop-sidebar">
-        <NavigationContent recentQuestion={response && lastRequest ? lastRequest.question : undefined} />
-      </aside>
+      <header className="topbar">
+        <div className="topbar-inner">
+          <a className="brand-lockup" href="#main-content" aria-label="Axiom Tech — Base de conhecimento">
+            <span className="brand-mark" aria-hidden="true">A</span>
+            <span><strong>Axiom Tech</strong><small>Base de conhecimento</small></span>
+          </a>
 
-      <dialog
-        className="mobile-navigation-dialog"
-        ref={navigationDialogRef}
-        aria-label="Navegação do espaço de conhecimento"
-        onClose={() => setMobileNavigationOpen(false)}
-      >
-        <aside className="mobile-sidebar">
-          <button className="icon-button mobile-close" type="button" onClick={closeMobileNavigation} aria-label="Fechar navegação"><Icon name="close" size={19} /></button>
-          <NavigationContent onNavigate={closeMobileNavigation} recentQuestion={response && lastRequest ? lastRequest.question : undefined} />
-        </aside>
-      </dialog>
+          <p className="trust-statement"><Icon name="check" size={16} /> Respostas internas com origem rastreável</p>
 
-      <div className="workspace">
-        <header className="topbar">
-          <button className="icon-button mobile-menu" type="button" onClick={openMobileNavigation} aria-label="Abrir navegação" aria-expanded={mobileNavigationOpen}><Icon name="menu" size={20} /></button>
-          <div className="topbar-title"><span>Knowledge workspace</span><strong>Axiom Tech</strong></div>
-          <div className="topbar-status" role="status"><span className={`status-dot ${systemState.data?.status === 'ok' ? 'status-dot--online' : 'status-dot--offline'}`} /><span>{systemState.data?.status === 'ok' ? 'Índice conectado' : 'Verificando índice'}</span></div>
-        </header>
+          <a className={`system-link system-link--${systemSummary.tone}`} href="#system-status">
+            <span className="status-dot" aria-hidden="true" />
+            <span>{systemSummary.label}</span>
+          </a>
+        </div>
+      </header>
 
-        <main id="main-content" className="main-content">
-          <section className="query-introduction" id="ask" aria-labelledby="workspace-title">
-            <div>
-              <p className="section-label">Assistente de conhecimento interno</p>
-              <h1 id="workspace-title">Encontre a resposta certa, com a fonte ao lado.</h1>
-              <p>Consulte documentos corporativos e acompanhe como a resposta foi construída.</p>
-            </div>
-            <span className="keyboard-hint" aria-label="Atalho de teclado: barra para focar a pergunta">/ para buscar</span>
-          </section>
+      <main id="main-content" className="main-content">
+        <section className="workspace-heading" aria-labelledby="workspace-title">
+          <div>
+            <p>Conhecimento interno</p>
+            <h1 id="workspace-title">Consulte a base corporativa.</h1>
+            <p className="workspace-description">Faça uma pergunta de trabalho. A resposta só é apresentada como verificada quando houver fontes rastreáveis ao lado.</p>
+          </div>
+          <kbd aria-label="Atalho: barra para focar a pergunta">/</kbd>
+        </section>
 
-          <div className="workspace-grid">
-            <div className="query-column">
-              <form className="query-form" onSubmit={handleSubmit}>
-                <label className="sr-only" htmlFor="corporate-question">Sua pergunta</label>
-                <div className="question-field">
-                  <Icon name="search" size={20} />
-                  <textarea
-                    id="corporate-question"
-                    ref={questionInputRef}
-                    value={question}
-                    onChange={(event) => setQuestion(event.target.value)}
-                    onKeyDown={handleQuestionKeyDown}
-                    placeholder="Pergunte sobre uma política, um procedimento ou uma especificação…"
-                    rows={2}
-                    aria-describedby="query-help"
-                    disabled={queryPhase === 'loading'}
-                  />
-                </div>
-                <div className="query-controls">
+        <div className="workspace-grid">
+          <div className="primary-column">
+            <form className="query-form" onSubmit={handleSubmit} aria-busy={queryPhase === 'loading'}>
+              <div className="query-label-row">
+                <label htmlFor="corporate-question">Sua pergunta</label>
+                <span>{question.length.toLocaleString('pt-BR')} / {MAX_QUESTION_LENGTH.toLocaleString('pt-BR')}</span>
+              </div>
+
+              <div className={`question-field ${validationError ? 'question-field--error' : ''}`}>
+                <Icon name="search" size={20} />
+                <textarea
+                  id="corporate-question"
+                  ref={questionInputRef}
+                  value={question}
+                  onChange={handleQuestionChange}
+                  onKeyDown={handleQuestionKeyDown}
+                  placeholder="Ex.: qual é o procedimento para um incidente SEV-1?"
+                  rows={3}
+                  maxLength={MAX_QUESTION_LENGTH}
+                  aria-describedby={queryDescriptionIds}
+                  aria-invalid={validationError ? true : undefined}
+                  disabled={queryPhase === 'loading'}
+                />
+              </div>
+
+              {validationError && <p className="field-error" id="question-error" role="alert"><Icon name="warning" size={15} />{validationError}</p>}
+
+              <details className="query-options">
+                <summary>
+                  <span><Icon name="settings" size={16} /> {domain ? `Área: ${formatDomain(domain)}` : 'Ajustar área e quantidade de evidências'}</span>
+                  <Icon name="chevron" size={16} />
+                </summary>
+                <div className="query-options-panel">
                   <div className="control-group">
-                    <label htmlFor="domain">Contexto</label>
-                    <select id="domain" value={domain} onChange={(event) => setDomain(event.target.value as Domain | '')} disabled={queryPhase === 'loading'}>
+                    <label htmlFor="domain">Área da busca</label>
+                    <select
+                      id="domain"
+                      value={domain}
+                      onChange={(event) => setDomain(event.target.value as Domain | '')}
+                      disabled={queryPhase === 'loading'}
+                    >
                       <option value="">Detectar automaticamente</option>
                       <option value="rh">Pessoas & cultura</option>
                       <option value="juridico">Jurídico & LGPD</option>
-                      <option value="engenharia">Engenharia</option>
-                      <option value="api_spec">Especificações de API</option>
+                      <option value="engenharia">Engenharia & operações</option>
+                      <option value="api_spec">Repositórios & APIs</option>
                       <option value="web">Pesquisa técnica externa</option>
                     </select>
                   </div>
                   <div className="control-group control-group--compact">
-                    <label htmlFor="evidence-count">Fontes</label>
-                    <select id="evidence-count" value={topK} onChange={(event) => setTopK(Number(event.target.value))} disabled={queryPhase === 'loading'}>
-                      <option value={2}>2</option><option value={4}>4</option><option value={6}>6</option>
+                    <label htmlFor="evidence-count">Máximo de evidências</label>
+                    <select
+                      id="evidence-count"
+                      value={topK}
+                      onChange={(event) => setTopK(Number(event.target.value))}
+                      disabled={queryPhase === 'loading'}
+                    >
+                      <option value={2}>2 trechos</option>
+                      <option value={4}>4 trechos</option>
+                      <option value={6}>6 trechos</option>
                     </select>
                   </div>
-                  <button className="button button--primary" type="submit" disabled={queryPhase === 'loading'}>
-                    {queryPhase === 'loading' ? <Icon name="refresh" size={17} /> : <Icon name="arrow-up" size={17} />}
-                    {queryPhase === 'loading' ? 'Consultando…' : 'Consultar'}
-                  </button>
                 </div>
-                <p id="query-help" className="query-help">Use Ctrl + Enter para enviar. As respostas priorizam fontes internas verificáveis.</p>
-              </form>
+              </details>
 
+              {domain === 'web' && (
+                <p className="web-research-note" id="web-research-note">
+                  <Icon name="warning" size={15} /> A pesquisa externa só é executada quando configurada e usa domínios previamente permitidos.
+                </p>
+              )}
+
+              <div className="query-actions">
+                <p id="query-help"><span>Enter</span> envia · <span>Shift + Enter</span> cria uma linha</p>
+                <button className="button button--primary" type="submit" disabled={queryPhase === 'loading'}>
+                  <Icon name={queryPhase === 'loading' ? 'refresh' : 'arrow-up'} size={17} />
+                  {queryPhase === 'loading' ? 'Consultando…' : 'Consultar base'}
+                </button>
+              </div>
+            </form>
+
+            {showSuggestions && (
               <section className="suggestions" aria-labelledby="suggestions-heading">
-                <div className="suggestions-heading"><p className="section-label" id="suggestions-heading">Perguntas para começar</p><span>Escolha uma e ajuste se precisar</span></div>
-                <div className="suggestion-list">
-                  {suggestions.map((suggestion) => (
-                    <button className="suggestion" type="button" key={suggestion.question} onClick={() => chooseSuggestion(suggestion)}><Icon name="spark" size={16} /><span>{suggestion.question}</span></button>
-                  ))}
+                <div className="suggestions-heading">
+                  <h2 id="suggestions-heading">Perguntas frequentes</h2>
+                  <p>Use um exemplo ou escreva a sua.</p>
                 </div>
+                <ul className="suggestion-list">
+                  {suggestions.map((suggestion) => (
+                    <li key={suggestion.question}>
+                      <button type="button" onClick={() => chooseSuggestion(suggestion)}>
+                        <span>{suggestion.question}</span>
+                        <small>{suggestion.label}</small>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
               </section>
+            )}
 
-              <div className="response-region" id="response" aria-live="polite">{answerContent}</div>
-            </div>
-
-            <div id="system"><StatusRail state={systemState} indexState={indexState} onRefresh={() => void loadStatus()} onReindex={() => void reindexDocuments()} /></div>
+            <section className="response-region" id="response" aria-label="Resultado da consulta">
+              {answerContent}
+            </section>
           </div>
-        </main>
-      </div>
+
+          <aside className="companion-column" aria-label="Evidências e estado da base">
+            {evidenceContent}
+            <StatusPanel
+              state={systemState}
+              indexState={indexState}
+              onRefresh={() => void loadStatus()}
+              onReindex={() => void reindexDocuments()}
+            />
+          </aside>
+        </div>
+
+        <p className="live-announcement sr-only" aria-live="polite" aria-atomic="true">{announcement}</p>
+      </main>
+
+      <footer className="footer">
+        <p>Axiom Tech · Respostas internas devem permanecer vinculadas às fontes.</p>
+        <a href="#main-content">Voltar ao início</a>
+      </footer>
     </div>
   );
 }

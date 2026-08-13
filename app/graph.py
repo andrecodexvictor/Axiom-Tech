@@ -1,13 +1,25 @@
-"""The V3 grounded RAG workflow implemented as a LangGraph StateGraph."""
+"""The bounded grounded-retrieval workflow implemented as a LangGraph StateGraph."""
 
 from __future__ import annotations
 
-import re
+from contextlib import ExitStack, contextmanager
+import logging
 from typing import Any, Dict, List, Optional
 
+from app.agents.grounding import (
+    deduplicate_evidence,
+    grade_evidence,
+    rewrite_query,
+)
+from app.agents.routing import (
+    SUPPORTED_DOMAINS,
+    classify_domain,
+    specialist_for,
+    validate_requested_domain,
+)
 from app.agents.state import AgentState, GraphTraceEvent
 from app.agents.web_research import WebResearchAgent
-from app.llm_client import NvidiaGateway
+from app.llm_client import ModelGateway
 from app.vectorstore.port import RetrievedChunk, VectorStorePort
 
 try:  # The package is a required production dependency; fallback keeps legacy CLI usable during bootstrap.
@@ -22,21 +34,25 @@ except ImportError:  # pragma: no cover - exercised only when dependencies were 
 
 
 MAX_REWRITES = 2
-SUPPORTED_DOMAINS = {"rh", "juridico", "engenharia", "api_spec", "web"}
+MAX_GRAPH_RECURSION = 18
+
+
+logger = logging.getLogger(__name__)
 
 
 class AxiomAgentGraph:
-    """Supervisor → retrieval/specialist → grade → rewrite/synthesize/fallback.
+    """Route → retrieve → grade → bounded reformulation → answer/refuse.
 
-    The graph is deliberately deterministic at its control points.  A cloud model
-    may improve prose in the synthesis node, but it cannot route around grading,
-    bypass evidence, or create citations.
+    This is an observable LangGraph workflow, not a claim that private model
+    reasoning is exposed as ReAct.  Control decisions are deterministic and every
+    retrieval action is bounded.  A cloud model may improve prose in synthesis,
+    but it cannot route around grading, bypass evidence, or create citations.
     """
 
     def __init__(
         self,
         vector_store: VectorStorePort,
-        model_gateway: NvidiaGateway,
+        model_gateway: ModelGateway,
         web_research_agent: Optional[WebResearchAgent] = None,
     ) -> None:
         self.vector_store = vector_store
@@ -81,10 +97,13 @@ class AxiomAgentGraph:
         question = user_question.strip()
         if not question:
             raise ValueError("question must not be empty")
+        requested_domain = validate_requested_domain(domain)
+        requested_limit = max(1, min(int(top_k), 10))
         initial: AgentState = {
             "question": question,
-            "requested_domain": domain if domain in SUPPORTED_DOMAINS else None,
+            "requested_domain": requested_domain,
             "active_question": question,
+            "retrieval_domain": requested_domain,
             "retrieved_docs": [],
             "rewrite_count": 0,
             "trace": [],
@@ -93,9 +112,19 @@ class AxiomAgentGraph:
             "messages": [],
             # StateGraph carries the requested limit as ordinary state; it is not
             # exposed as part of the public answer contract.
-            "top_k": max(1, min(int(top_k), 10)),
+            "top_k": requested_limit,
         }
-        result = dict(self.graph.invoke(initial))
+        run_config = {
+            "recursion_limit": MAX_GRAPH_RECURSION,
+            "run_name": "axiom-grounded-query",
+            "tags": ["axiom-v3", "grounded-retrieval"],
+            "metadata": self._trace_metadata(requested_domain, requested_limit),
+        }
+        with self._langsmith_scope():
+            if LANGGRAPH_AVAILABLE:
+                result = dict(self.graph.invoke(initial, config=run_config))
+            else:
+                result = dict(self.graph.invoke(initial))
         # Existing CLI callers used these V1 names.
         result.setdefault("classified_domain", result.get("domain", "engenharia"))
         result.setdefault("next_agent", result.get("specialist", "engineering"))
@@ -104,16 +133,11 @@ class AxiomAgentGraph:
         return result
 
     def _supervisor(self, state: AgentState) -> Dict[str, Any]:
-        domain = state.get("requested_domain") or self._classify(state["question"])
-        specialist = {
-            "rh": "hr_policy",
-            "juridico": "legal_compliance",
-            "api_spec": "repository_api",
-            "engenharia": "engineering_operations",
-            "web": "web_research",
-        }[domain]
+        domain = state.get("requested_domain") or classify_domain(state["question"])
+        specialist = specialist_for(domain)
         return {
             "domain": domain,
+            "retrieval_domain": domain,
             "classified_domain": domain,
             "specialist": specialist,
             "next_agent": specialist,
@@ -139,29 +163,27 @@ class AxiomAgentGraph:
     def _retrieval(self, state: AgentState) -> Dict[str, Any]:
         query = state["active_question"]
         limit = int(state.get("top_k", 4))
-        domain = state.get("domain")
+        domain = state.get("retrieval_domain", state.get("domain"))
         documents = self.vector_store.search(query=query, domain=domain, limit=limit)
+        scope = domain or "all-domains"
+        step = int(state.get("rewrite_count", 0)) + 1
         return {
             "retrieved_docs": documents,
             "trace": self._trace(
                 state,
                 "retrieval",
                 "searched",
-                "Retrieved {0} {1} candidate chunk(s)".format(len(documents), domain or "all-domain"),
+                "Retrieval step {0}/{1}: accepted {2} candidate chunk(s) in {3}".format(
+                    step, MAX_REWRITES + 1, len(documents), scope
+                ),
             ),
         }
 
     def _specialist(self, state: AgentState) -> Dict[str, Any]:
-        documents = list(state.get("retrieved_docs", []))
-        # If a classifier's domain is too narrow, a cross-domain pass is safe: the
-        # grader still requires textual evidence and citations retain true domain.
-        if not documents and state.get("domain"):
-            documents = self.vector_store.search(
-                query=state["active_question"], domain=None, limit=int(state.get("top_k", 4))
-            )
-            detail = "No domain evidence; performed a cross-domain retrieval"
-        else:
-            detail = "Specialist evaluated {0} retrieved chunk(s)".format(len(documents))
+        documents = deduplicate_evidence(
+            state.get("retrieved_docs", []), limit=int(state.get("top_k", 4))
+        )
+        detail = "Specialist accepted {0} unique evidence chunk(s)".format(len(documents))
         citations = [item.citation() for item in documents]
         sources = list(dict.fromkeys(citation["source"] for citation in citations))
         return {
@@ -173,14 +195,21 @@ class AxiomAgentGraph:
 
     def _grade(self, state: AgentState) -> Dict[str, Any]:
         documents = list(state.get("retrieved_docs", []))
-        coverage = self._evidence_coverage(state["question"], documents)
-        passed = bool(documents) and coverage >= 0.15
-        status = "passed" if passed else "rewrite"
-        detail = "Evidence coverage {0:.2f}; {1}".format(
-            coverage, "grounded synthesis allowed" if passed else "insufficient evidence"
+        grade = grade_evidence(
+            state["question"],
+            documents,
+            allow_semantic_only=self._semantic_grounding_allowed(),
+        )
+        status = "passed" if grade.passed else "rewrite"
+        detail = "Coverage {0:.2f}, best relevance {1:.2f}; {2}".format(
+            grade.lexical_coverage,
+            grade.best_relevance_score,
+            "grounded synthesis allowed" if grade.passed else "insufficient evidence",
         )
         return {
             "grade_status": status,
+            "evidence_coverage": grade.lexical_coverage,
+            "best_relevance_score": grade.best_relevance_score,
             "trace": self._trace(state, "grade", status, detail),
         }
 
@@ -193,12 +222,25 @@ class AxiomAgentGraph:
 
     def _rewrite(self, state: AgentState) -> Dict[str, Any]:
         attempt = int(state.get("rewrite_count", 0)) + 1
-        rewrite = self._rewrite_query(state["question"], attempt)
+        domain = str(state.get("domain", "engenharia"))
+        rewrite = rewrite_query(state["question"], attempt, domain)
+        # An inferred domain may be wrong.  The final bounded retrieval action can
+        # widen scope, but an explicitly requested domain is always respected.
+        retrieval_domain = domain
+        if attempt == MAX_REWRITES and state.get("requested_domain") is None:
+            retrieval_domain = None
+        scope = retrieval_domain or "all-domains"
         return {
             "active_question": rewrite,
             "rewrite_count": attempt,
+            "retrieval_domain": retrieval_domain,
             "trace": self._trace(
-                state, "rewrite", "rewritten", "Prepared bounded retrieval rewrite {0}/{1}".format(attempt, MAX_REWRITES)
+                state,
+                "rewrite",
+                "rewritten",
+                "Prepared retrieval reformulation {0}/{1}; next scope {2}".format(
+                    attempt, MAX_REWRITES, scope
+                ),
             ),
         }
 
@@ -216,7 +258,7 @@ class AxiomAgentGraph:
         }
 
     def _fallback(self, state: AgentState) -> Dict[str, Any]:
-        if NvidiaGateway._is_portuguese(state["question"]):
+        if ModelGateway._is_portuguese(state["question"]):
             answer = (
                 "Não consigo fundamentar uma resposta na documentação interna indexada. "
                 "Tente informar a política, o sistema, o documento ou um tópico mais específico."
@@ -242,52 +284,75 @@ class AxiomAgentGraph:
 
     @staticmethod
     def _classify(question: str) -> str:
-        value = question.lower()
-        rules = (
-            ("web", ("search the web", "web research", "internet research", "online research", "external research")),
-            ("juridico", ("lgpd", "privacidade", "privacy", "termo", "terms", "legal", "compliance", "dados pessoais")),
-            ("rh", ("home office", "benefício", "beneficio", "onboarding", "reembolso", "expense", "férias", "ferias", "rh")),
-            ("api_spec", ("endpoint", "api", "repo", "github", "openapi", "swagger", "repository")),
-        )
-        for domain, keywords in rules:
-            if any(keyword in value for keyword in keywords):
-                return domain
-        return "engenharia"
+        return classify_domain(question)
 
     @staticmethod
     def _evidence_coverage(question: str, documents: List[RetrievedChunk]) -> float:
-        stop_words = {
-            "a", "an", "and", "as", "at", "como", "da", "de", "do", "e", "for", "how", "is", "o", "of", "on", "or", "os", "para", "qual", "que", "the", "to", "um", "uma", "what", "with",
-        }
-        terms = {
-            word
-            for word in re.findall(r"[\wÀ-ÿ][\wÀ-ÿ._/-]*", question.lower(), flags=re.UNICODE)
-            if len(word) > 2 and word not in stop_words
-        }
-        if not documents:
-            return 0.0
-        content = " ".join(document.content.lower() for document in documents)
-        matching = sum(1 for term in terms if term in content)
-        lexical = matching / max(1, len(terms))
-        # Retrieval distance narrows candidates, but cannot on its own establish a
-        # claim: deterministic vectors (and cloud vectors) can surface loosely
-        # related text.  Grading therefore requires lexical evidence from the
-        # actual retrieved content before synthesis is permitted.
-        return lexical
+        return grade_evidence(question, documents).lexical_coverage
 
     @staticmethod
     def _rewrite_query(question: str, attempt: int) -> str:
-        words = re.findall(r"[\wÀ-ÿ][\wÀ-ÿ._/-]*", question, flags=re.UNICODE)
-        meaningful = [word for word in words if len(word) > 2]
-        base = " ".join(meaningful) or question
-        suffix = "internal policy" if attempt == 1 else "procedure guideline"
-        return "{0} {1}".format(base, suffix)
+        return rewrite_query(question, attempt, "engenharia")
 
     @staticmethod
     def _trace(state: AgentState, node: str, event: str, details: str) -> List[GraphTraceEvent]:
         trace = list(state.get("trace", []))
-        trace.append({"node": node, "event": event, "details": details})
+        safe_details = " ".join(str(details).split())[:320]
+        trace.append({"node": node, "event": event, "details": safe_details})
         return trace
+
+    def _trace_metadata(self, requested_domain: Optional[str], top_k: int) -> Dict[str, Any]:
+        status = self.vector_store.status()
+        embedding = status.get("embedding", {})
+        return {
+            "workflow": "grounded-retrieval-v1",
+            "requested_domain": requested_domain or "automatic",
+            "top_k": top_k,
+            "vector_backend": str(status.get("backend", "unknown")),
+            "embedding_fingerprint": str(embedding.get("fingerprint", "")),
+        }
+
+    def _semantic_grounding_allowed(self) -> bool:
+        embedding = dict(self.vector_store.status().get("embedding", {}) or {})
+        return bool(
+            embedding.get("configured")
+            and embedding.get("mode") == "remote"
+            and embedding.get("provider") not in {"", "deterministic", "disabled"}
+        )
+
+    @contextmanager
+    def _langsmith_scope(self):
+        configuration = self.model_gateway.configuration
+        if not bool(getattr(configuration, "langsmith_enabled", False)):
+            yield
+            return
+        try:
+            from langsmith import Client, tracing_context
+
+            client_options: Dict[str, Any] = {
+                "api_key": configuration.langsmith_api_key,
+                "api_url": configuration.langsmith_endpoint,
+            }
+            if configuration.langsmith_workspace_id:
+                client_options["workspace_id"] = configuration.langsmith_workspace_id
+            if configuration.langsmith_hide_inputs:
+                client_options["hide_inputs"] = lambda _inputs: {}
+            if configuration.langsmith_hide_outputs:
+                client_options["hide_outputs"] = lambda _outputs: {}
+            client = Client(**client_options)
+            context = tracing_context(
+                enabled=True,
+                client=client,
+                project_name=configuration.langsmith_project,
+            )
+            stack = ExitStack()
+            stack.enter_context(context)
+        except Exception as exc:
+            logger.warning("LangSmith tracing unavailable (%s)", type(exc).__name__)
+            yield
+            return
+        with stack:
+            yield
 
 
 class _BootstrapGraph:

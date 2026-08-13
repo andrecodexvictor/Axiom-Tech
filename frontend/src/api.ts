@@ -59,17 +59,50 @@ export interface SystemStatus {
   vector_store: {
     backend: string;
     collection: string;
+    physical_collection?: string;
     document_count: number;
+    embedding?: {
+      provider: string;
+      model?: string;
+      dimensions: number;
+      fingerprint: string;
+      mode: string;
+      configured: boolean;
+    };
+    retrieval?: {
+      strategy: string;
+      candidate_multiplier: number;
+      min_score: number;
+      lexical_weight: number;
+      mmr_lambda: number;
+    };
   };
   models: {
     gateway: string;
     remote_enabled: boolean;
+    model?: string;
+    fallback?: string;
+    routes?: Array<{
+      name: string;
+      provider: string;
+      model?: string;
+      configured: boolean;
+      circuit_state: string;
+    }>;
   };
   documents_dir: string;
   web_research?: {
     enabled: boolean;
     configured: boolean;
     allowlist_hosts: number;
+  };
+  observability?: {
+    provider: string;
+    enabled: boolean;
+    configured: boolean;
+    project: string;
+    inputs_hidden: boolean;
+    outputs_hidden: boolean;
   };
 }
 

@@ -58,7 +58,7 @@ O fluxo corporativo é baseado em evidências: o agente recupera trechos, avalia
 - LangGraph e LangChain
 - LangSmith para observabilidade opcional
 - ChromaDB como vector store padrão
-- NVIDIA NIM como gateway opcional de modelo
+- Gateway explícito para modo local, NVIDIA NIM ou OpenAI
 - React, TypeScript, Vite e pnpm
 - Docker e Docker Compose
 - OCI Compute, VCN, Security Lists/NSGs, Vault e Block Volume
@@ -245,15 +245,36 @@ documentos/api_spec/internal_endpoints.json
 
 As respostas reais podem variar na redação, mas devem manter as evidências apresentadas pela API. Uma pergunta sem suporte suficiente deve retornar grounded=false e não deve fabricar uma fonte.
 
-## Observabilidade e chaves de IA
+## Observabilidade, embeddings e chaves de IA
 
-O modo remoto NVIDIA é opcional:
+O modo local não exige segredos. Uma rota remota é sempre explícita; por
+exemplo, NVIDIA com fallback local apenas para falhas transitórias:
 
 ```dotenv
-AXIOM_NVIDIA_ENABLED=true
+AXIOM_LLM_PROVIDER=nvidia
+AXIOM_LLM_FALLBACK=deterministic
 NVIDIA_API_KEY=<provider-key>
 NVIDIA_MODEL=meta/llama-3.1-70b-instruct
 ```
+
+OpenAI usa `AXIOM_LLM_PROVIDER=openai`, `OPENAI_API_KEY` e `OPENAI_MODEL`.
+Uma ordem avançada pode ser declarada em `AXIOM_LLM_ROUTES`; a presença de uma
+chave nunca seleciona o provedor implicitamente. Endpoints OpenAI customizados
+exigem HTTPS e `AXIOM_OPENAI_ALLOW_CUSTOM_BASE_URL=true`.
+
+Embeddings semânticos também são opt-in e usam um espaço vetorial separado do
+gateway de síntese:
+
+```dotenv
+AXIOM_EMBEDDING_PROVIDER=openai
+AXIOM_EMBEDDING_API_KEY=<embedding-key>
+AXIOM_EMBEDDING_MODEL=text-embedding-3-small
+AXIOM_EMBEDDING_DIMENSIONS=1536
+```
+
+Trocar provider, modelo, dimensão ou endpoint de embeddings seleciona uma nova
+coleção física versionada; execute a ingestão explícita depois da mudança. Uma
+falha remota de embedding nunca cai silenciosamente para o hashing local.
 
 LangSmith é habilitado separadamente:
 

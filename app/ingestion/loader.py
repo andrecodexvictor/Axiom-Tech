@@ -8,10 +8,13 @@ handled slide-by-slide so citations can point to the original slide.
 from __future__ import annotations
 
 import csv
+import hashlib
 import json
+import re
+import unicodedata
 import zipfile
 from pathlib import Path
-from typing import Any, Dict, Iterable, List
+from typing import Any, Dict, Iterable, List, Optional
 from xml.etree import ElementTree
 
 
@@ -28,7 +31,6 @@ class DocumentLoader:
         ".json",
         ".csv",
         ".xlsx",
-        ".xls",
         ".pdf",
         ".docx",
         ".html",
@@ -37,7 +39,9 @@ class DocumentLoader:
     }
 
     @classmethod
-    def load_file(cls, file_path: Path) -> List[Dict[str, Any]]:
+    def load_file(
+        cls, file_path: Path, *, source_root: Optional[Path] = None
+    ) -> List[Dict[str, Any]]:
         path = Path(file_path)
         if not path.is_file():
             raise FileNotFoundError("File not found: {0}".format(path))
@@ -47,22 +51,28 @@ class DocumentLoader:
 
         domain = path.parent.name
         if extension in {".md", ".txt"}:
-            return [cls._document(path, domain, cls._read_text(path), extension)]
-        if extension == ".json":
-            return [cls._document(path, domain, cls._load_json(path), extension)]
-        if extension == ".csv":
-            return [cls._document(path, domain, cls._load_csv(path), extension)]
-        if extension in {".xlsx", ".xls"}:
-            return cls._load_excel(path, domain)
-        if extension == ".pdf":
-            return cls._load_pdf(path, domain)
-        if extension == ".docx":
-            return [cls._document(path, domain, cls._load_docx(path), extension)]
-        if extension in {".html", ".htm"}:
-            return [cls._document(path, domain, cls._load_html(path), extension)]
-        if extension == ".pptx":
-            return cls._load_pptx(path, domain)
-        raise UnsupportedDocumentError("Unsupported file type: {0}".format(extension))
+            documents = [cls._document(path, domain, cls._read_text(path), extension)]
+        elif extension == ".json":
+            documents = [cls._document(path, domain, cls._load_json(path), extension)]
+        elif extension == ".csv":
+            documents = [cls._document(path, domain, cls._load_csv(path), extension)]
+        elif extension == ".xlsx":
+            documents = cls._load_excel(path, domain)
+        elif extension == ".pdf":
+            documents = cls._load_pdf(path, domain)
+        elif extension == ".docx":
+            documents = [cls._document(path, domain, cls._load_docx(path), extension)]
+        elif extension in {".html", ".htm"}:
+            documents = [cls._document(path, domain, cls._load_html(path), extension)]
+        elif extension == ".pptx":
+            documents = cls._load_pptx(path, domain)
+        else:  # pragma: no cover - guarded by SUPPORTED_EXTENSIONS
+            raise UnsupportedDocumentError("Unsupported file type: {0}".format(extension))
+
+        source_key = cls._source_key(path, source_root)
+        for document in documents:
+            document["metadata"]["source_key"] = source_key
+        return documents
 
     @classmethod
     def load_directory(cls, directory: Path) -> List[Dict[str, Any]]:
@@ -108,13 +118,15 @@ class DocumentLoader:
     ) -> Dict[str, Any]:
         metadata: Dict[str, Any] = {
             "source": path.name,
-            "source_key": str(path.resolve()),
+            "source_key": path.as_posix(),
             "domain": domain,
             "file_type": file_type,
             "path": str(path),
         }
         metadata.update({key: value for key, value in location.items() if value is not None})
-        return {"content": content.strip(), "metadata": metadata}
+        normalized = cls._normalize_text(content)
+        metadata["document_hash"] = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+        return {"content": normalized, "metadata": metadata}
 
     @staticmethod
     def _load_json(path: Path) -> str:
@@ -135,18 +147,31 @@ class DocumentLoader:
             raise UnsupportedDocumentError("Excel support requires openpyxl") from exc
 
         workbook = openpyxl.load_workbook(path, data_only=True, read_only=True)
-        documents: List[Dict[str, Any]] = []
-        for worksheet in workbook.worksheets:
-            lines = []
-            for row in worksheet.iter_rows(values_only=True):
-                values = [str(value).strip() for value in row if value is not None and str(value).strip()]
-                if values:
-                    lines.append(" | ".join(values))
-            if lines:
-                documents.append(
-                    cls._document(path, domain, "\n".join(lines), path.suffix.lower(), sheet=worksheet.title)
-                )
-        return documents
+        try:
+            documents: List[Dict[str, Any]] = []
+            for worksheet in workbook.worksheets:
+                lines = []
+                for row in worksheet.iter_rows(values_only=True):
+                    values = [
+                        str(value).strip()
+                        for value in row
+                        if value is not None and str(value).strip()
+                    ]
+                    if values:
+                        lines.append(" | ".join(values))
+                if lines:
+                    documents.append(
+                        cls._document(
+                            path,
+                            domain,
+                            "\n".join(lines),
+                            path.suffix.lower(),
+                            sheet=worksheet.title,
+                        )
+                    )
+            return documents
+        finally:
+            workbook.close()
 
     @classmethod
     def _load_pdf(cls, path: Path, domain: str) -> List[Dict[str, Any]]:
@@ -160,7 +185,16 @@ class DocumentLoader:
         for page_number, page in enumerate(reader.pages, start=1):
             text = (page.extract_text() or "").strip()
             if text:
-                documents.append(cls._document(path, domain, text, ".pdf", page=page_number))
+                documents.append(
+                    cls._document(
+                        path,
+                        domain,
+                        text,
+                        ".pdf",
+                        page=page_number,
+                        page_count=len(reader.pages),
+                    )
+                )
         return documents
 
     @staticmethod
@@ -184,9 +218,10 @@ class DocumentLoader:
             from bs4 import BeautifulSoup
         except ImportError:
             return path.read_text(encoding="utf-8", errors="ignore")
-        return BeautifulSoup(path.read_text(encoding="utf-8", errors="ignore"), "html.parser").get_text(
-            separator="\n", strip=True
-        )
+        soup = BeautifulSoup(path.read_text(encoding="utf-8", errors="ignore"), "html.parser")
+        for tag in soup(["script", "style", "noscript", "svg", "iframe"]):
+            tag.decompose()
+        return soup.get_text(separator="\n", strip=True)
 
     @classmethod
     def _load_pptx(cls, path: Path, domain: str) -> List[Dict[str, Any]]:
@@ -217,9 +252,12 @@ class DocumentLoader:
         namespace = "{http://schemas.openxmlformats.org/drawingml/2006/main}t"
         with zipfile.ZipFile(path) as archive:
             names = sorted(
-                name
-                for name in archive.namelist()
-                if name.startswith("ppt/slides/slide") and name.endswith(".xml")
+                (
+                    name
+                    for name in archive.namelist()
+                    if name.startswith("ppt/slides/slide") and name.endswith(".xml")
+                ),
+                key=DocumentLoader._slide_number,
             )
             slides: List[str] = []
             for name in names:
@@ -227,3 +265,27 @@ class DocumentLoader:
                 values = [node.text for node in root.iter(namespace) if node.text]
                 slides.append("\n".join(values))
             return slides
+
+    @staticmethod
+    def _slide_number(name: str) -> int:
+        match = re.search(r"slide(\d+)\.xml$", name)
+        return int(match.group(1)) if match else 0
+
+    @staticmethod
+    def _source_key(path: Path, source_root: Optional[Path]) -> str:
+        if source_root is not None:
+            try:
+                return path.resolve().relative_to(Path(source_root).resolve()).as_posix()
+            except (OSError, ValueError):
+                pass
+        return path.as_posix()
+
+    @staticmethod
+    def _normalize_text(content: str) -> str:
+        value = unicodedata.normalize("NFC", content).replace("\r\n", "\n").replace("\r", "\n")
+        value = "".join(
+            character
+            for character in value
+            if character in {"\n", "\t"} or unicodedata.category(character) != "Cc"
+        )
+        return re.sub(r"\n{3,}", "\n\n", value).strip()

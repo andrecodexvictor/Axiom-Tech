@@ -26,6 +26,8 @@ def axiom_settings(tmp_path: Path) -> Settings:
         pinecone_api_key="",
         pinecone_index_name="",
         pinecone_environment="",
+        embedding_provider="deterministic",
+        embedding_dimensions=384,
     )
 
 

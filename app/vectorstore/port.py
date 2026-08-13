@@ -6,6 +6,13 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Protocol
 
 
+def _safe_int(value: Any, default: int = 0) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError, OverflowError):
+        return default
+
+
 @dataclass(frozen=True)
 class RetrievedChunk:
     id: str
@@ -20,11 +27,19 @@ class RetrievedChunk:
             "domain": str(self.metadata.get("domain", "unknown")),
             "file_type": str(self.metadata.get("file_type", "")),
             "chunk_id": str(self.metadata.get("chunk_id", self.id)),
-            "chunk_index": int(self.metadata.get("chunk_index", 0)),
+            "chunk_index": _safe_int(self.metadata.get("chunk_index", 0)),
             "score": round(float(self.score), 4),
             "path": str(self.metadata.get("path", "")),
-            **({"page": int(self.metadata["page"])} if self.metadata.get("page") is not None else {}),
-            **({"slide": int(self.metadata["slide"])} if self.metadata.get("slide") is not None else {}),
+            **(
+                {"page": _safe_int(self.metadata["page"])}
+                if self.metadata.get("page") is not None
+                else {}
+            ),
+            **(
+                {"slide": _safe_int(self.metadata["slide"])}
+                if self.metadata.get("slide") is not None
+                else {}
+            ),
             **({"sheet": str(self.metadata["sheet"])} if self.metadata.get("sheet") else {}),
         }
 

@@ -72,13 +72,43 @@ class HealthResponse(BaseModel):
 class VectorStoreStatusResponse(BaseModel):
     backend: str
     collection: str
+    physical_collection: Optional[str] = None
     document_count: int
+    embedding: Optional["EmbeddingStatusResponse"] = None
+    retrieval: Optional["RetrievalStatusResponse"] = None
+
+
+class EmbeddingStatusResponse(BaseModel):
+    provider: str
+    model: Optional[str] = None
+    dimensions: int
+    fingerprint: str
+    mode: str
+    configured: bool
+
+
+class RetrievalStatusResponse(BaseModel):
+    strategy: str
+    candidate_multiplier: int
+    min_score: float
+    lexical_weight: float
+    mmr_lambda: float
+
+
+class ModelRouteStatusResponse(BaseModel):
+    name: str
+    provider: str
+    model: Optional[str] = None
+    configured: bool
+    circuit_state: str
 
 
 class ModelStatusResponse(BaseModel):
     gateway: str
     remote_enabled: bool
     model: Optional[str] = None
+    fallback: str = "none"
+    routes: List[ModelRouteStatusResponse] = Field(default_factory=list)
 
 
 class WebResearchStatusResponse(BaseModel):

@@ -67,6 +67,25 @@ def test_ingestion_is_idempotent_and_query_is_grounded(axiom_settings, sample_do
     ]
 
 
+def test_embedding_fingerprint_change_selects_empty_collection_until_reingested(
+    axiom_settings, sample_documents
+) -> None:
+    pytest.importorskip("chromadb")
+    original = create_knowledge_service(axiom_settings)
+    original.ingest()
+    original_status = original.vector_store.status()
+
+    upgraded_settings = replace(axiom_settings, embedding_dimensions=512)
+    upgraded = create_knowledge_service(upgraded_settings)
+    upgraded_status = upgraded.vector_store.status()
+
+    assert original_status["physical_collection"] != upgraded_status["physical_collection"]
+    assert original_status["document_count"] > 0
+    assert upgraded_status["document_count"] == 0
+    assert upgraded.ingest().inserted > 0
+    assert upgraded.query("What is the home office benefit?", domain="rh")["grounded"] is True
+
+
 def test_unsupported_question_rewrites_at_most_twice_then_falls_back(axiom_settings, sample_documents) -> None:
     service = create_knowledge_service(axiom_settings)
     service.ingest()
@@ -173,6 +192,7 @@ def test_enabled_web_research_fetches_only_allowlisted_evidence_and_returns_url_
     agent = WebResearchAgent(
         configured,
         client_factory=lambda: httpx.Client(transport=httpx.MockTransport(handler), follow_redirects=False),
+        resolver=lambda _host: ("93.184.216.34",),
     )
     result = agent.research("What does the reliability guide recommend?", limit=4)
 
@@ -187,3 +207,41 @@ def test_enabled_web_research_fetches_only_allowlisted_evidence_and_returns_url_
         "evaluate",
         "refine_synthesize",
     ]
+
+
+def test_web_research_rejects_allowlisted_host_resolving_to_private_ip(axiom_settings) -> None:
+    configured = replace(
+        axiom_settings,
+        web_enabled=True,
+        serper_api_key="test-serper-key",
+        web_allowlist=("example.com",),
+    )
+    fetched = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST":
+            return httpx.Response(
+                200,
+                json={
+                    "organic": [
+                        {"title": "Private target", "link": "https://docs.example.com/internal"}
+                    ]
+                },
+                request=request,
+            )
+        fetched.append(str(request.url))
+        raise AssertionError("A private resolution must be rejected before HTTP GET")
+
+    agent = WebResearchAgent(
+        configured,
+        client_factory=lambda: httpx.Client(
+            transport=httpx.MockTransport(handler), follow_redirects=False
+        ),
+        resolver=lambda _host: ("127.0.0.1",),
+    )
+
+    result = agent.research("What does the internal guide require?")
+
+    assert result.grounded is False
+    assert result.citations == []
+    assert fetched == []

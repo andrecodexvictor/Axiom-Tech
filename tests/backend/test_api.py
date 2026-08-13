@@ -25,6 +25,22 @@ def test_versioned_api_returns_grounded_contract_and_never_echoes_credentials(
     assert health.status_code == 200
     assert health.json() == {"status": "ok", "version": "3.0.0"}
     assert status_before.status_code == 200
+    assert status_before.json()["models"] == {
+        "gateway": "deterministic",
+        "remote_enabled": False,
+        "model": None,
+        "fallback": "none",
+        "routes": [
+            {
+                "name": "deterministic",
+                "provider": "deterministic",
+                "model": None,
+                "configured": True,
+                "circuit_state": "closed",
+            }
+        ],
+    }
+    assert status_before.json()["documents_dir"] == "documents"
     assert status_before.json()["observability"] == {
         "provider": "langsmith",
         "enabled": False,
@@ -44,6 +60,7 @@ def test_versioned_api_returns_grounded_contract_and_never_echoes_credentials(
     assert "not-used-kimi-key" not in serialized
     assert "not-used-minimax-key" not in serialized
     assert "not-used-deepseek-key" not in serialized
+    assert str(axiom_settings.documents_dir.parent) not in serialized
 
 
 def test_ingest_rejects_a_path_outside_configured_documents_root(axiom_settings) -> None:
