@@ -38,10 +38,12 @@ export type IconName =
   | 'database'
   | 'external-link'
   | 'file'
+  | 'info'
   | 'nodes'
   | 'refresh'
   | 'search'
   | 'settings'
+  | 'upload'
   | 'warning';
 
 const domainLabels: Record<string, string> = {
@@ -49,6 +51,8 @@ const domainLabels: Record<string, string> = {
   juridico: 'Jurídico & LGPD',
   engenharia: 'Engenharia & operações',
   api_spec: 'Repositórios & APIs',
+  estrategico: 'Estratégia & governança',
+  comunicacao: 'Comunicação & institucional',
   web: 'Pesquisa técnica externa',
   geral: 'Base corporativa',
 };
@@ -65,7 +69,24 @@ const specialistLabels: Record<string, string> = {
   engineering_agent: 'Engenharia & operações',
   repository: 'Repositórios & APIs',
   repo_agent: 'Repositórios & APIs',
+  estrategico: 'Estratégia & governança',
+  strategic: 'Estratégia & governança',
+  strategic_agent: 'Estratégia & governança',
+  strategic_planning: 'Estratégia & governança',
+  strategy_specialist: 'Estratégia & governança',
+  comunicacao: 'Comunicação & institucional',
+  communication: 'Comunicação & institucional',
+  communication_agent: 'Comunicação & institucional',
+  corporate_communications: 'Comunicação & institucional',
+  communication_specialist: 'Comunicação & institucional',
   web_research: 'Pesquisa técnica externa',
+};
+
+const responseModeLabels: Record<string, string> = {
+  concise: 'Direta (concisa)',
+  detailed: 'Detalhada',
+  checklist: 'Checklist',
+  evidence: 'Evidências',
 };
 
 const traceNodeLabels: Record<string, string> = {
@@ -124,6 +145,8 @@ export function Icon({ name, size = 18 }: { name: IconName; size?: number }) {
       return <svg {...common}><path d="M14 5h5v5M19 5l-8 8" /><path d="M17 13v5a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V8a1 1 0 0 1 1-1h5" /></svg>;
     case 'file':
       return <svg {...common}><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z" /><path d="M14 2v6h6M8 13h8M8 17h6" /></svg>;
+    case 'info':
+      return <svg {...common}><circle cx="12" cy="12" r="9" /><path d="M12 8h.01M12 12v4" /></svg>;
     case 'nodes':
       return <svg {...common}><circle cx="6" cy="6" r="2" /><circle cx="18" cy="6" r="2" /><circle cx="12" cy="18" r="2" /><path d="m7.7 7.1 2.7 8.1M16.3 7.1l-2.7 8.1M8 6h8" /></svg>;
     case 'refresh':
@@ -132,9 +155,16 @@ export function Icon({ name, size = 18 }: { name: IconName; size?: number }) {
       return <svg {...common}><circle cx="11" cy="11" r="6.5" /><path d="m16 16 4.5 4.5" /></svg>;
     case 'settings':
       return <svg {...common}><path d="M4 6h10M18 6h2M4 12h2M10 12h10M4 18h7M15 18h5" /><circle cx="16" cy="6" r="2" /><circle cx="8" cy="12" r="2" /><circle cx="13" cy="18" r="2" /></svg>;
+    case 'upload':
+      return <svg {...common}><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12" /></svg>;
     case 'warning':
       return <svg {...common}><path d="M10.3 4.2 2.7 18a2 2 0 0 0 1.7 3h15.2a2 2 0 0 0 1.7-3L13.7 4.2a2 2 0 0 0-3.4 0Z" /><path d="M12 9v4m0 4h.01" /></svg>;
   }
+}
+
+export function formatResponseMode(mode?: string): string {
+  if (!mode) return 'Direta';
+  return responseModeLabels[mode] ?? sentenceCase(mode);
 }
 
 export function getErrorMessage(error: unknown): string {
@@ -314,6 +344,9 @@ export const AnswerPanel = memo(function AnswerPanel({ response, question }: { r
       <dl className="answer-facts" aria-label="Contexto da resposta">
         <div><dt>Área consultada</dt><dd>{formatDomain(response.domain)}</dd></div>
         <div><dt>Rota responsável</dt><dd>{formatSpecialist(response.specialist)}</dd></div>
+        {response.response_mode && (
+          <div><dt>Modo da resposta</dt><dd>{formatResponseMode(response.response_mode)}</dd></div>
+        )}
         {response.rewrite_count > 0 && (
           <div><dt>Ajustes de busca</dt><dd>{formatCount(response.rewrite_count)}</dd></div>
         )}

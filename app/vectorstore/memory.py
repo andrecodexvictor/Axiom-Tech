@@ -11,6 +11,7 @@ from app.vectorstore.retrieval import (
     RetrievalPolicy,
     rerank_candidates,
 )
+from app.vectorstore.upsert import build_upsert_plan
 
 
 class InMemoryVectorStore(VectorStorePort):
@@ -31,45 +32,51 @@ class InMemoryVectorStore(VectorStorePort):
 
     def upsert(self, chunks: List[Dict[str, Any]], *, force: bool = False) -> UpsertResult:
         normalized = [self._normalize_chunk(chunk) for chunk in chunks]
-        inserted = updated = unchanged = 0
-        source_to_current: Dict[str, set[str]] = {}
-        to_write: List[Dict[str, Any]] = []
-        for chunk in normalized:
-            identifier = chunk["id"]
-            content = chunk["content"]
-            metadata = chunk["metadata"]
-            source_to_current.setdefault(str(metadata.get("source_key", "")), set()).add(identifier)
-            prior = self._chunks.get(identifier)
-            if prior is None:
-                inserted += 1
-                to_write.append(chunk)
-            elif not force and prior["content"] == content and prior["metadata"] == metadata:
-                unchanged += 1
-            else:
-                updated += 1
-                to_write.append(chunk)
-        if to_write:
-            embeddings = self.embedding.embed_many(item["content"] for item in to_write)
-            if len(embeddings) != len(to_write):
+        plan = build_upsert_plan(
+            normalized,
+            self._chunks,
+            force=force,
+            is_unchanged=lambda prior, chunk: (
+                prior["content"] == chunk["content"]
+                and prior["metadata"] == chunk["metadata"]
+            ),
+        )
+        if plan.to_write:
+            embeddings = self.embedding.embed_many(
+                item["content"] for item in plan.to_write
+            )
+            if len(embeddings) != len(plan.to_write):
                 raise RuntimeError("Embedding provider returned an incomplete upsert batch")
-            for chunk, embedding in zip(to_write, embeddings):
+            for chunk, embedding in zip(plan.to_write, embeddings):
                 self._chunks[chunk["id"]] = {
                     "content": chunk["content"],
                     "metadata": chunk["metadata"],
                     "embedding": embedding,
                 }
+        removed = self._delete_stale_chunks(plan.current_ids_by_source)
+        return UpsertResult(
+            len(normalized),
+            plan.inserted,
+            plan.updated,
+            plan.unchanged,
+            removed,
+        )
+
+    def _delete_stale_chunks(self, current_ids_by_source: Dict[str, set[str]]) -> int:
         removed = 0
-        for source, current_ids in source_to_current.items():
-            if source:
-                stale = [
-                    identifier
-                    for identifier, value in self._chunks.items()
-                    if str(value["metadata"].get("source_key", "")) == source and identifier not in current_ids
-                ]
-                for identifier in stale:
-                    del self._chunks[identifier]
-                removed += len(stale)
-        return UpsertResult(len(normalized), inserted, updated, unchanged, removed)
+        for source, current_ids in current_ids_by_source.items():
+            if not source:
+                continue
+            stale = [
+                identifier
+                for identifier, value in self._chunks.items()
+                if str(value["metadata"].get("source_key", "")) == source
+                and identifier not in current_ids
+            ]
+            for identifier in stale:
+                del self._chunks[identifier]
+            removed += len(stale)
+        return removed
 
     def source_inventory(self) -> List[Dict[str, Any]]:
         grouped: Dict[str, Dict[str, Any]] = {}

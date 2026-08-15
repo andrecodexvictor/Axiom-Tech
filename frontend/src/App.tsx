@@ -14,6 +14,7 @@ import {
   type Domain,
   type QueryRequest,
   type QueryResponse,
+  type ResponseMode,
 } from './api';
 import {
   AnswerPanel,
@@ -22,6 +23,7 @@ import {
   EvidencePanel,
   formatDomain,
   formatIngestMessage,
+  formatResponseMode,
   getErrorMessage,
   getSystemSummary,
   Icon,
@@ -34,6 +36,7 @@ import {
   type SourceState,
   type StatusState,
 } from './components';
+import { DocumentUploadPanel, FaqSection } from './knowledge-tools';
 
 type RequestPhase = 'idle' | 'loading' | 'success' | 'error';
 
@@ -51,6 +54,16 @@ const suggestions: Array<{ question: string; domain: Domain; label: string }> = 
     label: 'Pessoas',
   },
   {
+    question: 'Quais são as diretrizes de governança e metas estratégicas para o trimestre?',
+    domain: 'estrategico',
+    label: 'Estratégia',
+  },
+  {
+    question: 'Como aplicar o tom de voz e as diretrizes de comunicação institucional?',
+    domain: 'comunicacao',
+    label: 'Comunicação',
+  },
+  {
     question: 'Quais são os direitos dos titulares segundo a política de LGPD?',
     domain: 'juridico',
     label: 'Jurídico',
@@ -65,6 +78,7 @@ const suggestions: Array<{ question: string; domain: Domain; label: string }> = 
 export default function App() {
   const [question, setQuestion] = useState('');
   const [domain, setDomain] = useState<Domain | ''>('');
+  const [responseMode, setResponseMode] = useState<ResponseMode>('concise');
   const [topK, setTopK] = useState(4);
   const [validationError, setValidationError] = useState<string | null>(null);
   const [queryPhase, setQueryPhase] = useState<RequestPhase>('idle');
@@ -198,8 +212,13 @@ export default function App() {
       return;
     }
 
-    void runQuery({ question: trimmedQuestion, domain: domain || null, top_k: topK });
-  }, [domain, question, runQuery, topK]);
+    void runQuery({
+      question: trimmedQuestion,
+      domain: domain || null,
+      top_k: topK,
+      response_mode: responseMode,
+    });
+  }, [domain, question, responseMode, runQuery, topK]);
 
   const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -231,6 +250,11 @@ export default function App() {
   const retryLastQuery = useCallback(() => {
     if (lastRequest) void runQuery(lastRequest);
   }, [lastRequest, runQuery]);
+
+  const handleUploadSuccess = useCallback(() => {
+    void loadStatus();
+    void loadSources();
+  }, [loadSources, loadStatus]);
 
   const reindexDocuments = useCallback(async () => {
     indexAbortRef.current?.abort();
@@ -353,7 +377,12 @@ export default function App() {
 
               <details className="query-options">
                 <summary>
-                  <span><Icon name="settings" size={16} /> {domain ? `Área: ${formatDomain(domain)}` : 'Ajustar área e quantidade de evidências'}</span>
+                  <span>
+                    <Icon name="settings" size={16} />{' '}
+                    {domain
+                      ? `Área: ${formatDomain(domain)} · Modo: ${formatResponseMode(responseMode)}`
+                      : `Formato: ${formatResponseMode(responseMode)} · Ajustar busca`}
+                  </span>
                   <Icon name="chevron" size={16} />
                 </summary>
                 <div className="query-options-panel">
@@ -370,7 +399,23 @@ export default function App() {
                       <option value="juridico">Jurídico & LGPD</option>
                       <option value="engenharia">Engenharia & operações</option>
                       <option value="api_spec">Repositórios & APIs</option>
+                      <option value="estrategico">Estratégia & governança</option>
+                      <option value="comunicacao">Comunicação & institucional</option>
                       <option value="web">Pesquisa técnica externa</option>
+                    </select>
+                  </div>
+                  <div className="control-group">
+                    <label htmlFor="response-mode">Formato da resposta</label>
+                    <select
+                      id="response-mode"
+                      value={responseMode}
+                      onChange={(event) => setResponseMode(event.target.value as ResponseMode)}
+                      disabled={queryPhase === 'loading'}
+                    >
+                      <option value="concise">Direta</option>
+                      <option value="detailed">Detalhada</option>
+                      <option value="checklist">Checklist</option>
+                      <option value="evidence">Evidências</option>
                     </select>
                   </div>
                   <div className="control-group control-group--compact">
@@ -426,10 +471,16 @@ export default function App() {
             <section className="response-region" id="response" aria-label="Resultado da consulta">
               {answerContent}
             </section>
+
+            <FaqSection />
           </div>
 
           <aside className="companion-column" aria-label="Evidências e estado da base">
             {evidenceContent}
+            <DocumentUploadPanel
+              onSuccess={handleUploadSuccess}
+              disabled={queryPhase === 'loading'}
+            />
             <StatusPanel
               state={systemState}
               indexState={indexState}

@@ -196,6 +196,85 @@ class ModelRouteConfig:
         return not self.remote or bool(self.api_key and self.model and self.base_url)
 
 
+def _optional_env(name: str) -> Optional[str]:
+    value = str(os.getenv(name) or "").strip()
+    return value if value else None
+
+
+def _provider_routes(provider_value: str, fallback_value: Optional[str]) -> Tuple[str, ...]:
+    provider = provider_value.strip().lower()
+    if provider not in {"deterministic", "nvidia", "openai"}:
+        raise ConfigurationError("AXIOM_LLM_PROVIDER is unsupported")
+    if fallback_value is None:
+        fallback = "none" if provider == "deterministic" else "deterministic"
+    else:
+        fallback = fallback_value.strip().lower()
+    if fallback not in {"none", "deterministic"}:
+        raise ConfigurationError("AXIOM_LLM_FALLBACK must be none or deterministic")
+    if provider == "deterministic" and fallback != "none":
+        raise ConfigurationError("A deterministic provider cannot have a fallback")
+    routes = [provider]
+    if fallback == "deterministic":
+        routes.append("deterministic")
+    return tuple(routes)
+
+
+def _llm_routes_from_env() -> Tuple[Tuple[str, ...], bool]:
+    routes_value = _optional_env("AXIOM_LLM_ROUTES")
+    provider_value = _optional_env("AXIOM_LLM_PROVIDER")
+    fallback_value = _optional_env("AXIOM_LLM_FALLBACK")
+    explicit = any(value is not None for value in (routes_value, provider_value))
+
+    if routes_value is not None and provider_value is not None:
+        raise ConfigurationError("Set AXIOM_LLM_ROUTES or AXIOM_LLM_PROVIDER, not both")
+    if routes_value is not None:
+        if fallback_value is not None:
+            raise ConfigurationError("AXIOM_LLM_ROUTES already defines fallback order")
+        return _model_routes(routes_value), explicit
+    if provider_value is not None:
+        return _provider_routes(provider_value, fallback_value), explicit
+    if fallback_value is not None:
+        raise ConfigurationError("AXIOM_LLM_FALLBACK requires AXIOM_LLM_PROVIDER")
+    return (), explicit
+
+
+def _openai_endpoint_from_env() -> Tuple[str, bool]:
+    base_url = _safe_https_url(
+        os.getenv("AXIOM_OPENAI_BASE_URL"),
+        "https://api.openai.com/v1",
+        "AXIOM_OPENAI_BASE_URL",
+    )
+    allow_custom = _as_bool(
+        os.getenv("AXIOM_OPENAI_ALLOW_CUSTOM_BASE_URL"),
+        False,
+        "AXIOM_OPENAI_ALLOW_CUSTOM_BASE_URL",
+    )
+    if urlsplit(base_url).hostname != "api.openai.com" and not allow_custom:
+        raise ConfigurationError(
+            "AXIOM_OPENAI_ALLOW_CUSTOM_BASE_URL=true is required for a custom OpenAI endpoint"
+        )
+    return base_url, allow_custom
+
+
+def _embedding_provider_from_env() -> str:
+    provider = os.getenv("AXIOM_EMBEDDING_PROVIDER", "deterministic").strip().lower()
+    return "openai" if provider == "openai-compatible" else provider
+
+
+def _validate_configured_settings(
+    configured: "Settings", *, explicit_routes: bool
+) -> "Settings":
+    if configured.chunk_overlap >= configured.chunk_size:
+        raise ConfigurationError("AXIOM_CHUNK_OVERLAP must be smaller than AXIOM_CHUNK_SIZE")
+    if configured.embedding_provider == "openai" and not configured.embedding_api_key:
+        raise ConfigurationError(
+            "AXIOM_EMBEDDING_API_KEY is required when AXIOM_EMBEDDING_PROVIDER=openai"
+        )
+    if explicit_routes:
+        configured.validate_selected_model_routes()
+    return configured
+
+
 @dataclass(frozen=True)
 class Settings:
     """Runtime settings read from the environment once at application startup."""
@@ -306,53 +385,9 @@ class Settings:
         legacy_nvidia_enabled = _as_bool(
             os.getenv("AXIOM_NVIDIA_ENABLED"), False, "AXIOM_NVIDIA_ENABLED"
         )
-        routes_value = (os.getenv("AXIOM_LLM_ROUTES") or "").strip() or None
-        provider_value = (os.getenv("AXIOM_LLM_PROVIDER") or "").strip() or None
-        fallback_value = (os.getenv("AXIOM_LLM_FALLBACK") or "").strip() or None
-        explicit_routes = routes_value is not None or provider_value is not None
-
-        if routes_value is not None and provider_value is not None:
-            raise ConfigurationError("Set AXIOM_LLM_ROUTES or AXIOM_LLM_PROVIDER, not both")
-        if routes_value is not None:
-            if fallback_value is not None:
-                raise ConfigurationError("AXIOM_LLM_ROUTES already defines fallback order")
-            routes = _model_routes(routes_value)
-        elif provider_value is not None:
-            provider = provider_value.strip().lower()
-            if provider not in {"deterministic", "nvidia", "openai"}:
-                raise ConfigurationError("AXIOM_LLM_PROVIDER is unsupported")
-            fallback = fallback_value or (
-                "none" if provider == "deterministic" else "deterministic"
-            )
-            fallback = fallback.strip().lower()
-            if fallback not in {"none", "deterministic"}:
-                raise ConfigurationError("AXIOM_LLM_FALLBACK must be none or deterministic")
-            if provider == "deterministic" and fallback != "none":
-                raise ConfigurationError("A deterministic provider cannot have a fallback")
-            routes = (provider,) + (("deterministic",) if fallback == "deterministic" else ())
-        else:
-            if fallback_value is not None:
-                raise ConfigurationError("AXIOM_LLM_FALLBACK requires AXIOM_LLM_PROVIDER")
-            routes = ()
-
-        openai_base_url = _safe_https_url(
-            os.getenv("AXIOM_OPENAI_BASE_URL"),
-            "https://api.openai.com/v1",
-            "AXIOM_OPENAI_BASE_URL",
-        )
-        allow_custom_openai = _as_bool(
-            os.getenv("AXIOM_OPENAI_ALLOW_CUSTOM_BASE_URL"),
-            False,
-            "AXIOM_OPENAI_ALLOW_CUSTOM_BASE_URL",
-        )
-        if urlsplit(openai_base_url).hostname != "api.openai.com" and not allow_custom_openai:
-            raise ConfigurationError(
-                "AXIOM_OPENAI_ALLOW_CUSTOM_BASE_URL=true is required for a custom OpenAI endpoint"
-            )
-
-        embedding_provider = os.getenv("AXIOM_EMBEDDING_PROVIDER", "deterministic").strip().lower()
-        if embedding_provider == "openai-compatible":
-            embedding_provider = "openai"
+        routes, explicit_routes = _llm_routes_from_env()
+        openai_base_url, allow_custom_openai = _openai_endpoint_from_env()
+        embedding_provider = _embedding_provider_from_env()
 
         configured = cls(
             documents_dir=documents_dir,
@@ -548,15 +583,7 @@ class Settings:
             ),
         )
 
-        if configured.chunk_overlap >= configured.chunk_size:
-            raise ConfigurationError("AXIOM_CHUNK_OVERLAP must be smaller than AXIOM_CHUNK_SIZE")
-        if configured.embedding_provider == "openai" and not configured.embedding_api_key:
-            raise ConfigurationError(
-                "AXIOM_EMBEDDING_API_KEY is required when AXIOM_EMBEDDING_PROVIDER=openai"
-            )
-        if explicit_routes:
-            configured.validate_selected_model_routes()
-        return configured
+        return _validate_configured_settings(configured, explicit_routes=explicit_routes)
 
     @property
     def effective_model_route_names(self) -> Tuple[str, ...]:

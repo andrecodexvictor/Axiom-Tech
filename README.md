@@ -122,6 +122,7 @@ GET  /api/v1/health
 GET  /api/v1/status
 POST /api/v1/query
 POST /api/v1/ingest
+POST /api/v1/documents
 GET  /api/v1/sources
 POST /api/v1/embeddings/rebuild
 ```
@@ -151,6 +152,16 @@ docker compose up -d --no-build
 ```
 
 O frontend ficará em http://localhost:8080 e a API em http://localhost:8000.
+
+Para construir as duas imagens localmente, sem alterar o compose oficial que
+exige imagens imutáveis do registry:
+
+```powershell
+docker compose -f docker-compose.local.yml up --build
+```
+
+O compose local monta `./documentos` em `/app/documentos`, portanto documentos
+adicionados pelo frontend persistem no corpus local após recriar o container.
 O repositório não faz build de imagem na máquina local ou na VM; para
 desenvolvimento sem imagens, use os processos Python e Vite das etapas acima.
 
@@ -201,7 +212,13 @@ print(documents[0]["metadata"])
 
 O mesmo loader possui caminhos específicos para PDF, DOCX, XLSX, PPTX, JSON, HTML, Markdown e texto. PDF e PowerPoint preservam o número da página ou do slide quando disponível; planilhas preservam o nome da aba.
 
-Para ampliar o conhecimento interno, coloque arquivos aprovados em uma pasta de domínio dentro de `documentos/` (por exemplo, `documentos/financeiro/relatorio.md`) e execute a ingestão. O painel **Documentos disponíveis** mostra o arquivo, tipo, tamanho, estado e quantidade de trechos; a ação **Gerar embeddings novamente** recalcula todos os vetores com o provider atualmente configurado. O inventário não exibe o conteúdo do documento no navegador.
+Para ampliar o conhecimento interno, use o painel **Upload de documento** ou
+coloque arquivos aprovados em uma pasta de domínio dentro de `documentos/` e
+execute a ingestão. O upload aceita um arquivo de até 15 MB, nunca sobrescreve
+um nome existente e indexa o conteúdo imediatamente. O painel **Documentos
+disponíveis** mostra arquivo, tipo, tamanho, estado e quantidade de trechos;
+sua pré-visualização é limitada ao texto extraído. A ação **Gerar embeddings
+novamente** recalcula todos os vetores com o provider atualmente configurado.
 
 Pesquisa externa é uma fonte separada e opt-in: configure `AXIOM_WEB_ENABLED=true`, uma `SERPER_API_KEY` e uma allowlist HTTPS em `AXIOM_WEB_ALLOWLIST`. Sem os três itens, perguntas com domínio `web` permanecem desativadas e não fazem chamadas externas.
 

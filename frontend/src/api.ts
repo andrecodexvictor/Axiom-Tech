@@ -1,9 +1,19 @@
-export type Domain = 'rh' | 'juridico' | 'engenharia' | 'api_spec' | 'web';
+export type Domain =
+  | 'rh'
+  | 'juridico'
+  | 'engenharia'
+  | 'api_spec'
+  | 'estrategico'
+  | 'comunicacao'
+  | 'web';
+
+export type ResponseMode = 'concise' | 'detailed' | 'checklist' | 'evidence';
 
 export interface QueryRequest {
   question: string;
   domain?: Domain | null;
   top_k?: number;
+  response_mode?: ResponseMode;
 }
 
 export interface Citation {
@@ -35,8 +45,22 @@ export interface QueryResponse {
   trace: TraceEvent[];
   rewrite_count: number;
   grounded: boolean;
+  response_mode?: ResponseMode | string;
   duration_ms?: number;
   timings_ms?: Record<string, number>;
+}
+
+export interface DocumentUploadResponse {
+  filename: string;
+  domain: string;
+  path: string;
+  file_type: string;
+  size_bytes: number;
+  status: string;
+  chunks: number;
+  inserted: number;
+  updated: number;
+  unchanged: number;
 }
 
 export interface IngestFile {
@@ -268,6 +292,21 @@ export const knowledgeApi = {
       headers: { 'Content-Type': 'application/json' },
       body: '{}',
     }, MAINTENANCE_TIMEOUT_MS);
+  },
+
+  uploadDocument(file: File, domain: Domain, signal?: AbortSignal) {
+    const formData = new FormData();
+    formData.append('file', file);
+    formData.append('domain', domain);
+    return request<DocumentUploadResponse>(
+      '/api/v1/documents',
+      {
+        method: 'POST',
+        signal,
+        body: formData,
+      },
+      MAINTENANCE_TIMEOUT_MS,
+    );
   },
 
   sources(signal?: AbortSignal) {

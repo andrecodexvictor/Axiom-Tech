@@ -6,12 +6,13 @@ import argparse
 import logging
 from typing import Optional
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile, status as http_status
 from fastapi.middleware.cors import CORSMiddleware
 
 from app import __version__
 from app.config import Settings, settings
 from app.schemas import (
+    DocumentUploadResponse,
     HealthResponse,
     IngestRequest,
     IngestResponse,
@@ -21,6 +22,7 @@ from app.schemas import (
     SourcesResponse,
     StatusResponse,
 )
+from app.ingestion.upload import UploadRejectedError, UploadTooLargeError
 from app.service import KnowledgeService, create_knowledge_service
 
 
@@ -64,11 +66,41 @@ def create_app(
             logger.error("Ingestion failed (%s)", type(exc).__name__)
             raise HTTPException(status_code=503, detail="Ingestion is temporarily unavailable") from exc
 
+    @application.post(
+        "/api/v1/documents",
+        response_model=DocumentUploadResponse,
+        status_code=http_status.HTTP_201_CREATED,
+    )
+    def upload_document(
+        file: UploadFile = File(...),
+        domain: str = Form(..., min_length=2, max_length=32),
+    ) -> dict:
+        try:
+            return application.state.knowledge_service.upload_document(
+                file.file,
+                filename=file.filename or "",
+                domain=domain,
+            ).as_dict()
+        except UploadTooLargeError as exc:
+            raise HTTPException(status_code=413, detail="Document exceeds the 15 MB limit") from exc
+        except FileExistsError as exc:
+            raise HTTPException(status_code=409, detail="A document with this name already exists") from exc
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail="Document destination is not allowed") from exc
+        except UploadRejectedError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except Exception as exc:
+            logger.error("Document upload failed (%s)", type(exc).__name__)
+            raise HTTPException(status_code=503, detail="Document upload is temporarily unavailable") from exc
+
     @application.post("/api/v1/query", response_model=QueryResponse, response_model_exclude_none=True)
     def query(request: QueryRequest) -> dict:
         try:
             return application.state.knowledge_service.query(
-                request.question, domain=request.domain, top_k=request.top_k
+                request.question,
+                domain=request.domain,
+                top_k=request.top_k,
+                response_mode=request.response_mode,
             )
         except ValueError as exc:
             raise HTTPException(status_code=422, detail="Question is invalid") from exc

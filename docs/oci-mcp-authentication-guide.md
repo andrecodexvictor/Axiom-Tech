@@ -68,7 +68,7 @@ curl.exe --fail http://137.131.132.101:8080/api/v1/health
 Resultado esperado:
 
 ```json
-{"status":"ok","version":"3.0.0"}
+{"status":"ok","version":"3.1.0"}
 ```
 
 Se o firewall UFW estiver ativo na VM:

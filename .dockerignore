@@ -21,6 +21,7 @@ __pycache__/
 docs/
 tests/
 *.md
+!documentos/**/*.md
 dot*.yaml
 dot*.yml
 docker-compose*.yml

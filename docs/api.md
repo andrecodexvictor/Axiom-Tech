@@ -12,6 +12,7 @@ This is the V3 integration contract for the FastAPI boundary. It is intentionall
 | GET | /api/v1/status | Safe runtime status, such as selected local/optional providers and observability state. |
 | POST | /api/v1/query | Run the grounded query workflow. |
 | POST | /api/v1/ingest | Explicitly index the configured internal corpus. |
+| POST | /api/v1/documents | Add and immediately index one validated corpus document. |
 | GET | /api/v1/sources | List safe metadata and index state for each supported corpus file. |
 | GET | /api/v1/sources/preview?path=... | Return bounded text extracted from one corpus-relative document. |
 | POST | /api/v1/embeddings/rebuild | Recalculate every indexed vector using the active embedding provider. |
@@ -24,7 +25,8 @@ POST /api/v1/query
 {
   "question": "Como devo responder a um incidente SEV-1?",
   "domain": "engenharia",
-  "top_k": 4
+  "top_k": 4,
+  "response_mode": "checklist"
 }
 ~~~
 
@@ -44,7 +46,7 @@ The response is typed JSON. Its stable concepts are an answer, selected domain/s
       "chunk_id": "...",
       "chunk_index": 0,
       "score": 0.82,
-      "path": "documentos/engenharia/incident_resilience_manual.md"
+      "path": "engenharia/incident_resilience_manual.md"
     }
   ],
   "trace": [
@@ -56,6 +58,7 @@ The response is typed JSON. Its stable concepts are an answer, selected domain/s
   ],
   "rewrite_count": 0,
   "grounded": true,
+  "response_mode": "checklist",
   "duration_ms": 182.4,
   "timings_ms": {
     "retrieval_ms": 4.1,
@@ -65,7 +68,17 @@ The response is typed JSON. Its stable concepts are an answer, selected domain/s
 }
 ~~~
 
-The optional query domain is one of rh, juridico, engenharia, api_spec, or web; top_k is between 1 and 10. The `web` domain is explicit and fail-closed: it makes no outbound request unless web research, a Serper credential, and an HTTPS hostname allowlist are all configured. Internal citations may carry page, slide, sheet, and a corpus-relative path; verified external citations carry a URL. Clients must tolerate an empty citation array and missing optional locators. The trace contains execution metadata only; it is not a model chain-of-thought.
+The optional query domain is one of `rh`, `juridico`, `engenharia`,
+`api_spec`, `estrategico`, `comunicacao`, or `web`; `top_k` is between
+1 and 10. `response_mode` is `concise` (default), `detailed`, `checklist`,
+or `evidence`. It changes only the shape of a grounded answer and never bypasses
+retrieval, evidence grading, or the fail-closed fallback. The `web` domain is
+explicit and fail-closed: it makes no outbound request unless web research, a
+Serper credential, and an HTTPS hostname allowlist are all configured. Internal
+citations may carry page, slide, sheet, and a corpus-relative path; verified
+external citations carry a URL. Clients must tolerate an empty citation array
+and missing optional locators. The trace contains execution metadata only; it
+is not a model chain-of-thought.
 
 ## Runtime status
 
@@ -75,7 +88,7 @@ billable provider call. A representative response is:
 ~~~json
 {
   "status": "ok",
-  "version": "3.0.0",
+  "version": "3.1.0",
   "vector_store": {
     "backend": "chroma",
     "collection": "axiom_knowledge",
@@ -161,6 +174,22 @@ modification time, expected/indexed chunk counts, and a state of `indexed`,
 corpus-relative path, rejects traversal, uses the same multi-format extractor as
 ingestion, and returns at most 12,000 characters. Clients must treat the result
 as a convenience preview rather than the authoritative original document.
+
+### Document upload
+
+`POST /api/v1/documents` accepts `multipart/form-data` with one `file` and one
+internal `domain`. Upload domains are `rh`, `juridico`, `engenharia`,
+`api_spec`, `estrategico`, and `comunicacao`; `web` is never a writable corpus
+destination. Accepted extensions are `.md`, `.txt`, `.json`, `.csv`, `.xlsx`,
+`.pdf`, `.docx`, `.html`, `.htm`, and `.pptx`, with a 15 MB limit.
+
+The endpoint rejects paths in filenames, unsupported or mismatched formats,
+invalid UTF-8/JSON, unsafe expanded Office archives, empty/unextractable files,
+and collisions with an existing corpus filename. It never overwrites an
+existing document. A valid file is committed atomically under
+`AXIOM_DOCUMENTS_DIR/<domain>/`, indexed immediately, and returned with its
+corpus-relative path, size, chunk count, and upsert counts. If extraction or
+indexing fails, the newly created file is removed.
 
 ## Errors
 

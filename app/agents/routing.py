@@ -6,7 +6,10 @@ import re
 from typing import Optional
 
 
-SUPPORTED_DOMAINS = {"rh", "juridico", "engenharia", "api_spec", "web"}
+INTERNAL_DOMAINS = frozenset(
+    {"rh", "juridico", "engenharia", "api_spec", "estrategico", "comunicacao"}
+)
+SUPPORTED_DOMAINS = set(INTERNAL_DOMAINS) | {"web"}
 
 
 _DOMAIN_RULES = (
@@ -51,6 +54,32 @@ _DOMAIN_RULES = (
         ),
     ),
     (
+        "estrategico",
+        (
+            "okr",
+            "okrs",
+            "meta",
+            "metas",
+            "roadmap",
+            "planejamento estratégico",
+            "planejamento estrategico",
+            "prioridade estratégica",
+            "prioridade estrategica",
+        ),
+    ),
+    (
+        "comunicacao",
+        (
+            "newsletter",
+            "comunicado",
+            "comunicação interna",
+            "comunicacao interna",
+            "notícia interna",
+            "noticia interna",
+            "evento interno",
+        ),
+    ),
+    (
         "api_spec",
         ("endpoint", "api", "repo", "github", "openapi", "swagger", "repository"),
     ),
@@ -78,6 +107,8 @@ def specialist_for(domain: str) -> str:
             "juridico": "legal_compliance",
             "api_spec": "repository_api",
             "engenharia": "engineering_operations",
+            "estrategico": "strategic_planning",
+            "comunicacao": "corporate_communications",
             "web": "web_research",
         }[domain]
     except KeyError as exc:

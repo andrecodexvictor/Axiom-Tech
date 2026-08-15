@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from app.agents.grounding import deduplicate_evidence, grade_evidence
 from app.llm_client import ModelGateway, ModelProviderRejected, ModelProviderUnavailable
 from app.vectorstore.port import RetrievedChunk
 
@@ -243,3 +244,40 @@ def test_status_is_sanitized_per_route(axiom_settings) -> None:
     }
     assert "openai-secret" not in serialized
     assert "models.example.test" not in serialized
+
+
+def test_compact_evidence_keeps_the_relevant_markdown_section_bounded() -> None:
+    content = "\n".join(
+        [
+            "# Introduction",
+            "General material. " * 80,
+            "# Recovery objectives",
+            "The RTO is four hours.",
+            "The RPO is one hour.",
+            "# Contacts",
+            "Contact the service desk. " * 80,
+        ]
+    )
+
+    compact = ModelGateway._compact_evidence("What is the RTO?", content)
+
+    assert len(compact) <= 800
+    assert "# Recovery objectives" in compact
+    assert "The RTO is four hours." in compact
+    assert "# Contacts" not in compact
+
+
+def test_plain_excerpt_discards_unreadable_pdf_replacement_characters() -> None:
+    assert ModelGateway._plain_excerpt("\ufffd" * 500, max_chars=300) == ""
+
+
+def test_grounding_rejects_corrupt_extracted_evidence() -> None:
+    corrupt = RetrievedChunk(
+        id="broken-pdf",
+        content="\ufffd" * 500,
+        metadata={"source": "broken.pdf", "domain": "engenharia"},
+        score=0.99,
+    )
+
+    assert deduplicate_evidence([corrupt], limit=4) == []
+    assert grade_evidence("Como agir no incidente?", [corrupt]).passed is False

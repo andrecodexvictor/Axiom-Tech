@@ -10,6 +10,7 @@ from typing import Any, DefaultDict, Dict, Iterable, List, Optional, Sequence
 from app.vectorstore.embedding import EMBEDDING_CONTRACT_VERSION, EmbeddingPort
 from app.vectorstore.port import RetrievedChunk, UpsertResult, VectorStorePort
 from app.vectorstore.retrieval import RetrievalCandidate, RetrievalPolicy, rerank_candidates
+from app.vectorstore.upsert import build_upsert_plan
 
 
 class ChromaUnavailableError(RuntimeError):
@@ -101,68 +102,65 @@ class ChromaVectorStore(VectorStorePort):
                 existing.get("ids", []), existing.get("metadatas", [])
             )
         }
-        to_write: List[Dict[str, Any]] = []
-        inserted = updated = unchanged = 0
-        for chunk in normalized:
-            prior = existing_by_id.get(chunk["id"])
-            if prior is None:
-                inserted += 1
-                to_write.append(chunk)
-            elif (
-                not force
-                and self._same_metadata(prior, chunk["metadata"])
-            ):
-                unchanged += 1
-            else:
-                updated += 1
-                to_write.append(chunk)
+        plan = build_upsert_plan(
+            normalized,
+            existing_by_id,
+            force=force,
+            is_unchanged=lambda prior, chunk: self._same_metadata(
+                prior, chunk["metadata"]
+            ),
+        )
 
         # Resolve and validate every vector before deleting stale source chunks.
         # A remote embedding outage therefore cannot erase the last usable copy.
         write_embeddings = (
-            self.embedding.embed_many(chunk["content"] for chunk in to_write)
-            if to_write
+            self.embedding.embed_many(chunk["content"] for chunk in plan.to_write)
+            if plan.to_write
             else []
         )
-        if len(write_embeddings) != len(to_write):
+        if len(write_embeddings) != len(plan.to_write):
             raise RuntimeError("Embedding provider returned an incomplete upsert batch")
 
         # A changed source produces new content-addressed ids.  Remove old chunks
         # for that source before writing the replacement to prevent stale answers.
-        removed = 0
-        by_source: DefaultDict[str, set[str]] = defaultdict(set)
-        for chunk in normalized:
-            by_source[str(chunk["metadata"].get("source_key", ""))].add(chunk["id"])
-        for source_key, current_ids in by_source.items():
-            if not source_key:
-                continue
-            old_ids = set(self._ids_for_source(source_key))
-            stale_ids = list(old_ids - current_ids)
-            if stale_ids:
-                self._collection.delete(ids=stale_ids)
-                if self._chunk_cache is not None:
-                    for stale_id in stale_ids:
-                        self._chunk_cache.pop(stale_id, None)
-                if self._source_ids_cache is not None:
-                    self._source_ids_cache[source_key].difference_update(stale_ids)
-                removed += len(stale_ids)
-
-        if to_write:
-            self._upsert_many(to_write, write_embeddings)
-            if self._chunk_cache is not None and self._source_ids_cache is not None:
-                for chunk in to_write:
-                    identifier = chunk["id"]
-                    source_key = str(chunk["metadata"].get("source_key", ""))
-                    self._chunk_cache[identifier] = chunk["metadata"]
-                    if source_key:
-                        self._source_ids_cache[source_key].add(identifier)
+        removed = self._delete_stale_chunks(plan.current_ids_by_source)
+        if plan.to_write:
+            self._upsert_many(plan.to_write, write_embeddings)
+            self._cache_written_chunks(plan.to_write)
         return UpsertResult(
             received=len(normalized),
-            inserted=inserted,
-            updated=updated,
-            unchanged=unchanged,
+            inserted=plan.inserted,
+            updated=plan.updated,
+            unchanged=plan.unchanged,
             removed=removed,
         )
+
+    def _delete_stale_chunks(self, current_ids_by_source: Dict[str, set[str]]) -> int:
+        removed = 0
+        for source_key, current_ids in current_ids_by_source.items():
+            if not source_key:
+                continue
+            stale_ids = list(set(self._ids_for_source(source_key)) - current_ids)
+            if not stale_ids:
+                continue
+            self._collection.delete(ids=stale_ids)
+            if self._chunk_cache is not None:
+                for stale_id in stale_ids:
+                    self._chunk_cache.pop(stale_id, None)
+            if self._source_ids_cache is not None:
+                self._source_ids_cache[source_key].difference_update(stale_ids)
+            removed += len(stale_ids)
+        return removed
+
+    def _cache_written_chunks(self, chunks: List[Dict[str, Any]]) -> None:
+        if self._chunk_cache is None or self._source_ids_cache is None:
+            return
+        for chunk in chunks:
+            identifier = chunk["id"]
+            source_key = str(chunk["metadata"].get("source_key", ""))
+            self._chunk_cache[identifier] = chunk["metadata"]
+            if source_key:
+                self._source_ids_cache[source_key].add(identifier)
 
     def search(
         self, query: str, domain: Optional[str] = None, limit: int = 4

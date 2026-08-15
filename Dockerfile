@@ -17,7 +17,7 @@ COPY requirements.txt ./
 
 RUN --mount=type=cache,target=/root/.cache/pip \
     python -m venv "${VIRTUAL_ENV}" \
-    && "${VIRTUAL_ENV}/bin/pip" install -r requirements.txt \
+    && "${VIRTUAL_ENV}/bin/pip" install --no-compile -r requirements.txt \
     && find "${VIRTUAL_ENV}" -type d -name __pycache__ -prune -exec rm -rf {} +
 
 FROM ${PYTHON_BASE} AS api
@@ -71,6 +71,7 @@ RUN --mount=type=cache,id=axiom-pnpm-store,target=/pnpm/store \
     && pnpm install --frozen-lockfile
 
 COPY frontend/index.html frontend/tsconfig.json frontend/vite.config.ts ./
+COPY frontend/public ./public
 COPY frontend/src ./src
 
 ARG VITE_API_BASE_URL=""

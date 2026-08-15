@@ -6,11 +6,24 @@ from typing import Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
+from app.response_modes import ResponseMode
+
 
 class QueryRequest(BaseModel):
     question: str = Field(..., min_length=1, max_length=4000)
-    domain: Optional[Literal["rh", "juridico", "engenharia", "api_spec", "web"]] = None
+    domain: Optional[
+        Literal[
+            "rh",
+            "juridico",
+            "engenharia",
+            "api_spec",
+            "estrategico",
+            "comunicacao",
+            "web",
+        ]
+    ] = None
     top_k: int = Field(4, ge=1, le=10)
+    response_mode: ResponseMode = "concise"
 
 
 class IngestRequest(BaseModel):
@@ -47,6 +60,7 @@ class QueryResponse(BaseModel):
     trace: List[TraceResponse]
     rewrite_count: int
     grounded: bool
+    response_mode: str = "concise"
     duration_ms: float = 0.0
     timings_ms: Dict[str, float] = Field(default_factory=dict)
 
@@ -65,6 +79,19 @@ class IngestResponse(BaseModel):
     unchanged: int
     skipped: int
     files: List[IngestFileResponse]
+
+
+class DocumentUploadResponse(BaseModel):
+    filename: str
+    domain: str
+    path: str
+    file_type: str
+    size_bytes: int
+    status: str
+    chunks: int
+    inserted: int
+    updated: int
+    unchanged: int
 
 
 class SourceStatusResponse(BaseModel):

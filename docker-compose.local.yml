@@ -1,0 +1,67 @@
+name: axiom-tech-local
+
+services:
+  api:
+    build:
+      context: .
+      target: api
+    image: axiom-tech-api:local
+    init: true
+    environment:
+      AXIOM_DOCUMENTS_DIR: /app/documentos
+      AXIOM_CHROMA_PATH: /data/chroma
+      AXIOM_CHROMA_COLLECTION: axiom_knowledge_local
+      AXIOM_VECTOR_BACKEND: chroma
+      AXIOM_EMBEDDING_PROVIDER: deterministic
+      AXIOM_EMBEDDING_DIMENSIONS: 384
+      AXIOM_NVIDIA_ENABLED: "false"
+      AXIOM_WEB_ENABLED: "false"
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./documentos:/app/documentos
+      - chroma_local:/data
+    tmpfs:
+      - /tmp:size=16m,noexec,nosuid
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health', timeout=3)"
+      interval: 10s
+      timeout: 5s
+      start_period: 20s
+      retries: 6
+
+  frontend:
+    build:
+      context: .
+      target: frontend
+    image: axiom-tech-frontend:local
+    init: true
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "8080:80"
+    read_only: true
+    tmpfs:
+      - /var/cache/nginx:size=8m,noexec,nosuid
+      - /var/run:size=1m,noexec,nosuid
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - NET_BIND_SERVICE
+      - SETGID
+      - SETUID
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  chroma_local:

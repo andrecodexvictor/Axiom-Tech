@@ -5,12 +5,14 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, BinaryIO, Dict, List, Optional
 
+from app import __version__
 from app.config import Settings, settings
 from app.graph import AxiomAgentGraph
 from app.ingestion.chunker import DocumentChunker
 from app.ingestion.loader import DocumentLoader
+from app.ingestion.upload import DocumentUploadStore, UploadRejectedError
 from app.llm_client import ModelGateway
 from app.vectorstore.factory import create_vector_store
 from app.vectorstore.port import UpsertResult, VectorStorePort
@@ -56,6 +58,34 @@ class IngestReport:
         }
 
 
+@dataclass(frozen=True)
+class DocumentUploadReport:
+    filename: str
+    domain: str
+    path: str
+    file_type: str
+    size_bytes: int
+    status: str
+    chunks: int
+    inserted: int
+    updated: int
+    unchanged: int
+
+    def as_dict(self) -> Dict[str, Any]:
+        return {
+            "filename": self.filename,
+            "domain": self.domain,
+            "path": self.path,
+            "file_type": self.file_type,
+            "size_bytes": self.size_bytes,
+            "status": self.status,
+            "chunks": self.chunks,
+            "inserted": self.inserted,
+            "updated": self.updated,
+            "unchanged": self.unchanged,
+        }
+
+
 class KnowledgeService:
     """Use-case boundary: file ingestion and grounded queries."""
 
@@ -69,6 +99,7 @@ class KnowledgeService:
         self.vector_store = vector_store
         self.model_gateway = model_gateway
         self.chunker = DocumentChunker(configuration.chunk_size, configuration.chunk_overlap)
+        self.upload_store = DocumentUploadStore(configuration.documents_dir)
         self.graph = AxiomAgentGraph(vector_store, model_gateway)
 
     def ingest(self, path: Optional[str] = None, *, force: bool = False) -> IngestReport:
@@ -107,8 +138,48 @@ class KnowledgeService:
 
         return self.ingest(force=True)
 
-    def query(self, question: str, domain: Optional[str] = None, top_k: int = 4) -> Dict[str, Any]:
-        state = self.graph.run(question, domain=domain, top_k=top_k)
+    def upload_document(
+        self, stream: BinaryIO, *, filename: str, domain: str
+    ) -> DocumentUploadReport:
+        """Add one new file atomically and index it immediately."""
+
+        stored = self.upload_store.store(stream, filename=filename, domain=domain)
+        try:
+            report = self.ingest(str(stored.path))
+            if not report.files or report.skipped:
+                raise UploadRejectedError("Document could not be indexed")
+            outcome = report.files[0]
+            return DocumentUploadReport(
+                filename=stored.filename,
+                domain=stored.domain,
+                path=stored.relative_path,
+                file_type=stored.file_type,
+                size_bytes=stored.size_bytes,
+                status=outcome.status,
+                chunks=outcome.chunks,
+                inserted=report.inserted,
+                updated=report.updated,
+                unchanged=report.unchanged,
+            )
+        except Exception:
+            # The endpoint only creates new names, so rollback is a safe unlink;
+            # no pre-existing corpus file can be lost.
+            stored.path.unlink(missing_ok=True)
+            raise
+
+    def query(
+        self,
+        question: str,
+        domain: Optional[str] = None,
+        top_k: int = 4,
+        response_mode: str = "concise",
+    ) -> Dict[str, Any]:
+        state = self.graph.run(
+            question,
+            domain=domain,
+            top_k=top_k,
+            response_mode=response_mode,
+        )
         return {
             "answer": state["final_answer"],
             "domain": state.get("domain", state.get("classified_domain", "engenharia")),
@@ -117,6 +188,7 @@ class KnowledgeService:
             "trace": state.get("trace", []),
             "rewrite_count": int(state.get("rewrite_count", 0)),
             "grounded": bool(state.get("grounded", False)),
+            "response_mode": str(state.get("response_mode", response_mode)),
             "duration_ms": float(state.get("duration_ms", 0.0)),
             "timings_ms": {
                 str(key): round(float(value), 1)
@@ -142,7 +214,7 @@ class KnowledgeService:
             public_reason = "vector_store_unavailable"
         return {
             "status": "ok" if ready else ("empty" if backend == "chroma" else "degraded"),
-            "version": "3.0.0",
+            "version": __version__,
             "vector_store": {
                 "backend": backend,
                 "collection": store.get("collection", ""),

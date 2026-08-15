@@ -22,6 +22,7 @@ from app.agents.routing import (
 from app.agents.state import AgentState, GraphTraceEvent
 from app.agents.web_research import WebResearchAgent
 from app.llm_client import ModelGateway
+from app.response_modes import DEFAULT_RESPONSE_MODE, normalize_response_mode
 from app.vectorstore.port import RetrievedChunk, VectorStorePort
 
 try:  # The package is a required production dependency; fallback keeps legacy CLI usable during bootstrap.
@@ -98,7 +99,11 @@ class AxiomAgentGraph:
         return workflow.compile()
 
     def run(
-        self, user_question: str, domain: Optional[str] = None, top_k: int = 4
+        self,
+        user_question: str,
+        domain: Optional[str] = None,
+        top_k: int = 4,
+        response_mode: str = DEFAULT_RESPONSE_MODE,
     ) -> Dict[str, Any]:
         started = time.perf_counter()
         question = user_question.strip()
@@ -106,6 +111,7 @@ class AxiomAgentGraph:
             raise ValueError("question must not be empty")
         requested_domain = validate_requested_domain(domain)
         requested_limit = max(1, min(int(top_k), 10))
+        requested_response_mode = normalize_response_mode(response_mode)
         initial: AgentState = {
             "question": question,
             "requested_domain": requested_domain,
@@ -121,12 +127,15 @@ class AxiomAgentGraph:
             # StateGraph carries the requested limit as ordinary state; it is not
             # exposed as part of the public answer contract.
             "top_k": requested_limit,
+            "response_mode": requested_response_mode,
         }
         run_config = {
             "recursion_limit": MAX_GRAPH_RECURSION,
             "run_name": "axiom-grounded-query",
             "tags": ["axiom-v3", "grounded-retrieval"],
-            "metadata": self._trace_metadata(requested_domain, requested_limit),
+            "metadata": self._trace_metadata(
+                requested_domain, requested_limit, requested_response_mode
+            ),
         }
         with self._langsmith_scope():
             if LANGGRAPH_AVAILABLE:
@@ -270,7 +279,11 @@ class AxiomAgentGraph:
     def _synthesize(self, state: AgentState) -> Dict[str, Any]:
         started = time.perf_counter()
         evidence = list(state.get("retrieved_docs", []))
-        synthesis = self.model_gateway.synthesize(state["question"], evidence)
+        synthesis = self.model_gateway.synthesize(
+            state["question"],
+            evidence,
+            response_mode=state.get("response_mode", DEFAULT_RESPONSE_MODE),
+        )
         timings = self._timings(state)
         timings["synthesis_ms"] = round((time.perf_counter() - started) * 1000, 1)
         return {
@@ -328,13 +341,16 @@ class AxiomAgentGraph:
         trace.append({"node": node, "event": event, "details": safe_details})
         return trace
 
-    def _trace_metadata(self, requested_domain: Optional[str], top_k: int) -> Dict[str, Any]:
+    def _trace_metadata(
+        self, requested_domain: Optional[str], top_k: int, response_mode: str
+    ) -> Dict[str, Any]:
         status = self.vector_store.status()
         embedding = status.get("embedding", {})
         return {
             "workflow": "grounded-retrieval-v1",
             "requested_domain": requested_domain or "automatic",
             "top_k": top_k,
+            "response_mode": response_mode,
             "vector_backend": str(status.get("backend", "unknown")),
             "embedding_fingerprint": str(embedding.get("fingerprint", "")),
         }

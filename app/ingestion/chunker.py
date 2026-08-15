@@ -93,43 +93,61 @@ class DocumentChunker:
         start = 0
         text_length = len(text)
         while start < text_length:
-            end = min(text_length, start + self.chunk_size)
-            if end < text_length:
-                minimum_boundary = start + max(
-                    self.chunk_overlap + 1, int(self.chunk_size * 0.55)
-                )
-                for separator in separators:
-                    candidate = text.rfind(separator, minimum_boundary, end)
-                    if candidate >= minimum_boundary:
-                        end = candidate + len(separator)
-                        break
-
-            raw = text[start:end]
-            left_trim = len(raw) - len(raw.lstrip())
-            right_trim = len(raw) - len(raw.rstrip())
-            content_start = start + left_trim
-            content_end = end - right_trim
-            value = text[content_start:content_end]
+            end = self._preferred_boundary(text, start, text_length, separators)
+            content_start, content_end, value = self._trimmed_span(text, start, end)
             if value:
                 chunks.append((content_start, content_end, value))
             if end >= text_length:
                 break
-
-            next_start = max(start + 1, content_end - self.chunk_overlap)
-            # Do not start a chunk in the middle of a word.  Moving forward may
-            # shorten overlap slightly but keeps citations and excerpts readable.
-            while (
-                next_start < content_end
-                and next_start > 0
-                and not text[next_start - 1].isspace()
-            ):
-                next_start += 1
-            while next_start < text_length and text[next_start].isspace():
-                next_start += 1
-            if next_start >= content_end:
-                next_start = max(start + 1, end - self.chunk_overlap)
-            start = next_start
+            start = self._next_start(text, start, end, content_end, text_length)
         return chunks
+
+    def _preferred_boundary(
+        self,
+        text: str,
+        start: int,
+        text_length: int,
+        separators: Tuple[str, ...],
+    ) -> int:
+        end = min(text_length, start + self.chunk_size)
+        if end >= text_length:
+            return end
+        minimum = start + max(self.chunk_overlap + 1, int(self.chunk_size * 0.55))
+        for separator in separators:
+            candidate = text.rfind(separator, minimum, end)
+            if candidate >= minimum:
+                return candidate + len(separator)
+        return end
+
+    @staticmethod
+    def _trimmed_span(text: str, start: int, end: int) -> Tuple[int, int, str]:
+        raw = text[start:end]
+        content_start = start + len(raw) - len(raw.lstrip())
+        content_end = end - (len(raw) - len(raw.rstrip()))
+        return content_start, content_end, text[content_start:content_end]
+
+    def _next_start(
+        self,
+        text: str,
+        start: int,
+        end: int,
+        content_end: int,
+        text_length: int,
+    ) -> int:
+        next_start = max(start + 1, content_end - self.chunk_overlap)
+        # Move forward to a word boundary. This may shorten overlap slightly,
+        # but keeps citations and excerpts readable.
+        while (
+            next_start < content_end
+            and next_start > 0
+            and not text[next_start - 1].isspace()
+        ):
+            next_start += 1
+        while next_start < text_length and text[next_start].isspace():
+            next_start += 1
+        if next_start >= content_end:
+            return max(start + 1, end - self.chunk_overlap)
+        return next_start
 
     @staticmethod
     def _normalize_text(value: str) -> str:

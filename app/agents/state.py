@@ -16,6 +16,7 @@ class AgentState(TypedDict, total=False):
     requested_domain: Optional[str]
     active_question: str
     top_k: int
+    response_mode: str
     retrieval_domain: Optional[str]
     domain: str
     classified_domain: str  # Retained for V1 CLI compatibility.

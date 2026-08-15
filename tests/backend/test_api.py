@@ -23,7 +23,7 @@ def test_versioned_api_returns_grounded_contract_and_never_echoes_credentials(
         )
 
     assert health.status_code == 200
-    assert health.json() == {"status": "ok", "version": "3.0.0"}
+    assert health.json() == {"status": "ok", "version": "3.1.0"}
     assert status_before.status_code == 200
     assert status_before.json()["models"] == {
         "gateway": "deterministic",
@@ -61,9 +61,11 @@ def test_versioned_api_returns_grounded_contract_and_never_echoes_credentials(
         "trace",
         "rewrite_count",
         "grounded",
+        "response_mode",
         "duration_ms",
         "timings_ms",
     } <= set(body)
+    assert body["response_mode"] == "concise"
     assert body["grounded"] is True
     assert body["citations"][0]["source"] == "home_office.md"
     assert body["duration_ms"] >= 0
@@ -152,3 +154,78 @@ def test_source_preview_extracts_content_and_rejects_traversal(
     assert body["extracted_sections"] == 1
     assert str(axiom_settings.documents_dir.parent) not in json.dumps(body)
     assert traversal.status_code == 403
+
+
+def test_document_upload_is_atomic_indexed_and_rejects_unsafe_names(axiom_settings) -> None:
+    service = create_knowledge_service(axiom_settings)
+    application = create_app(service=service, configuration=axiom_settings)
+
+    with TestClient(application) as client:
+        created = client.post(
+            "/api/v1/documents",
+            data={"domain": "rh"},
+            files={
+                "file": (
+                    "remote_work_2026.md",
+                    b"# Remote work\nThe monthly allowance is reviewed every January.\n",
+                    "text/markdown",
+                )
+            },
+        )
+        duplicate = client.post(
+            "/api/v1/documents",
+            data={"domain": "rh"},
+            files={"file": ("remote_work_2026.md", b"different", "text/markdown")},
+        )
+        traversal = client.post(
+            "/api/v1/documents",
+            data={"domain": "rh"},
+            files={"file": ("../outside.md", b"unsafe", "text/markdown")},
+        )
+        executable = client.post(
+            "/api/v1/documents",
+            data={"domain": "rh"},
+            files={"file": ("payload.exe", b"MZ", "application/octet-stream")},
+        )
+
+    assert created.status_code == 201
+    assert created.json()["path"] == "rh/remote_work_2026.md"
+    assert created.json()["status"] == "indexed"
+    assert created.json()["chunks"] > 0
+    assert (axiom_settings.documents_dir / "rh" / "remote_work_2026.md").is_file()
+    assert duplicate.status_code == 409
+    assert traversal.status_code == 422
+    assert executable.status_code == 422
+    assert not (axiom_settings.documents_dir.parent / "outside.md").exists()
+
+
+def test_query_response_modes_and_new_corpus_domains_are_explicit(
+    axiom_settings, sample_documents
+) -> None:
+    strategic = axiom_settings.documents_dir / "estrategico"
+    strategic.mkdir()
+    (strategic / "okr.md").write_text(
+        "# OKR 2026\nThe reliability goal is 99.95 percent availability.\n",
+        encoding="utf-8",
+    )
+    service = create_knowledge_service(axiom_settings)
+    service.ingest()
+    application = create_app(service=service, configuration=axiom_settings)
+
+    with TestClient(application) as client:
+        response = client.post(
+            "/api/v1/query",
+            json={
+                "question": "Qual é a meta de confiabilidade do OKR?",
+                "domain": "estrategico",
+                "response_mode": "checklist",
+            },
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["domain"] == "estrategico"
+    assert body["specialist"] == "strategic_planning"
+    assert body["response_mode"] == "checklist"
+    assert body["grounded"] is True
+    assert body["answer"].startswith("Checklist fundamentado")

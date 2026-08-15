@@ -4,12 +4,18 @@ from __future__ import annotations
 
 import logging
 import re
+import textwrap
 import threading
 import time
 from dataclasses import dataclass
 from typing import Any, Callable, List, Optional, Sequence
 
 from app.config import ModelRouteConfig, Settings, settings
+from app.response_modes import (
+    DEFAULT_RESPONSE_MODE,
+    normalize_response_mode,
+    response_guidance,
+)
 from app.vectorstore.port import RetrievedChunk
 from app.vectorstore.retrieval import tokenize
 
@@ -95,12 +101,21 @@ class ModelGateway:
     def remote_enabled(self) -> bool:
         return self.configuration.remote_models_configured
 
-    def synthesize(self, question: str, evidence: Sequence[RetrievedChunk]) -> SynthesisResult:
+    def synthesize(
+        self,
+        question: str,
+        evidence: Sequence[RetrievedChunk],
+        *,
+        response_mode: str = DEFAULT_RESPONSE_MODE,
+    ) -> SynthesisResult:
+        requested_mode = normalize_response_mode(response_mode)
         transient_failure = False
         for route in self.configuration.model_routes:
             if not route.remote:
                 return SynthesisResult(
-                    answer=self._deterministic_synthesis(question, evidence),
+                    answer=self._deterministic_synthesis(
+                        question, evidence, response_mode=requested_mode
+                    ),
                     mode="deterministic",
                 )
             if not route.configured:
@@ -111,7 +126,9 @@ class ModelGateway:
                 logger.warning("Model route %s circuit is open", route.name)
                 continue
             try:
-                answer = self._remote_synthesize(route, question, evidence)
+                answer = self._remote_synthesize(
+                    route, question, evidence, response_mode=requested_mode
+                )
             except ModelProviderEmptyResponse as exc:
                 # A reasoning model can legally return HTTP 200 with no final
                 # content when its reasoning budget is exhausted.  Treat that
@@ -199,6 +216,8 @@ class ModelGateway:
         route: ModelRouteConfig,
         question: str,
         evidence: Sequence[RetrievedChunk],
+        *,
+        response_mode: str = DEFAULT_RESPONSE_MODE,
     ) -> str:
         context_parts: List[str] = []
         context_size = 0
@@ -236,7 +255,9 @@ class ModelGateway:
                     "content": (
                         "Use only the supplied internal evidence. "
                         "Answer in the user's language. "
-                        "If it is insufficient, say so. Be concise and do not invent citations."
+                        "If it is insufficient, say so. Do not invent citations or unsupported details."
+                        " "
+                        + response_guidance(normalize_response_mode(response_mode))
                     ),
                 },
                 {
@@ -302,13 +323,35 @@ class ModelGateway:
         if len(raw) <= MAX_EVIDENCE_CHARS:
             return normalized
         query_terms = {term for term in tokenize(question) if len(term) > 2}
-        segments = [
+        segments = ModelGateway._evidence_segments(content)
+        if not segments:
+            return normalized[:MAX_EVIDENCE_CHARS]
+        ranked, require_overlap = ModelGateway._rank_evidence_segments(
+            segments,
+            query_terms,
+        )
+        chosen = ModelGateway._fit_evidence_segments(
+            ranked,
+            query_terms,
+            require_overlap=require_overlap,
+        )
+        if not chosen:
+            return normalized[:MAX_EVIDENCE_CHARS]
+        return " ".join(segment for _, segment in sorted(chosen))
+
+    @staticmethod
+    def _evidence_segments(content: str) -> List[str]:
+        return [
             re.sub(r"\s+", " ", segment).strip()
             for segment in re.split(r"\n+|(?<=[.!?])\s+", content)
             if segment.strip()
         ]
-        if not segments:
-            return normalized[:MAX_EVIDENCE_CHARS]
+
+    @staticmethod
+    def _rank_evidence_segments(
+        segments: Sequence[str],
+        query_terms: set[str],
+    ) -> tuple[List[tuple[int, str]], bool]:
         overlap_by_index = {
             index: len(query_terms & set(tokenize(segment)))
             for index, segment in enumerate(segments)
@@ -318,25 +361,58 @@ class ModelGateway:
             key=lambda index: (overlap_by_index[index], -index),
         )
         # A Markdown heading often introduces the exact list or policy section
-        # needed by the question.  Preserve that heading and its following
-        # section instead of returning only the heading line.
-        if overlap_by_index[best_index] > 0 and re.match(r"^#{1,6}\s", segments[best_index]):
-            section_end = len(segments)
-            for index in range(best_index + 1, len(segments)):
-                if re.match(r"^#{1,6}\s", segments[index]):
-                    section_end = index
-                    break
-            ranked = [(index, segments[index]) for index in range(best_index, section_end)]
-        else:
-            ranked = sorted(
-                enumerate(segments),
-                key=lambda pair: (-overlap_by_index[pair[0]], pair[0]),
+        # needed by the question. Preserve the section containing the best
+        # segment instead of returning its matching line without context.
+        section = ModelGateway._markdown_section_bounds(segments, best_index)
+        if overlap_by_index[best_index] > 0 and section is not None:
+            section_start, section_end = section
+            return (
+                [(index, segments[index]) for index in range(section_start, section_end)],
+                False,
             )
+        ranked = sorted(
+            enumerate(segments),
+            key=lambda pair: (-overlap_by_index[pair[0]], pair[0]),
+        )
+        return ranked, True
+
+    @staticmethod
+    def _markdown_section_bounds(
+        segments: Sequence[str],
+        best_index: int,
+    ) -> Optional[tuple[int, int]]:
+        section_start = next(
+            (
+                index
+                for index in range(best_index, -1, -1)
+                if re.match(r"^#{1,6}\s", segments[index])
+            ),
+            None,
+        )
+        if section_start is None:
+            return None
+        section_end = next(
+            (
+                index
+                for index in range(best_index + 1, len(segments))
+                if re.match(r"^#{1,6}\s", segments[index])
+            ),
+            len(segments),
+        )
+        return section_start, section_end
+
+    @staticmethod
+    def _fit_evidence_segments(
+        ranked: Sequence[tuple[int, str]],
+        query_terms: set[str],
+        *,
+        require_overlap: bool,
+    ) -> List[tuple[int, str]]:
         chosen: List[tuple[int, str]] = []
         size = 0
         for index, segment in ranked:
             overlap = len(query_terms & set(tokenize(segment)))
-            if chosen and overlap == 0 and not re.match(r"^#{1,6}\s", segments[best_index]):
+            if chosen and overlap == 0 and require_overlap:
                 continue
             addition = len(segment) + (1 if chosen else 0)
             if size + addition > MAX_EVIDENCE_CHARS:
@@ -345,9 +421,7 @@ class ModelGateway:
             size += addition
             if size >= MAX_EVIDENCE_CHARS:
                 break
-        if not chosen:
-            return normalized[:MAX_EVIDENCE_CHARS]
-        return " ".join(segment for _, segment in sorted(chosen))
+        return chosen
 
     def _get_client(self, route: ModelRouteConfig) -> Any:
         if self._reuse_clients and route.name in self._clients:
@@ -423,7 +497,12 @@ class ModelGateway:
             return "open"
 
     @staticmethod
-    def _deterministic_synthesis(question: str, evidence: Sequence[RetrievedChunk]) -> str:
+    def _deterministic_synthesis(
+        question: str,
+        evidence: Sequence[RetrievedChunk],
+        *,
+        response_mode: str = DEFAULT_RESPONSE_MODE,
+    ) -> str:
         portuguese = ModelGateway._is_portuguese(question)
         if not evidence:
             return (
@@ -431,21 +510,17 @@ class ModelGateway:
                 if portuguese
                 else "I could not find internal evidence that answers this question."
             )
-        query_terms = set(tokenize(question))
-        excerpts: List[str] = []
-        seen = set()
-        for item in evidence:
-            compact_content = ModelGateway._compact_evidence(question, item.content)
-            excerpt = ModelGateway._best_sentence(compact_content, query_terms)
-            normalized = re.sub(r"\s+", " ", excerpt).strip()
-            if not normalized or normalized.lower() in seen:
-                continue
-            seen.add(normalized.lower())
-            source = str(item.metadata.get("source", "internal document"))
-            location = ModelGateway._location(item)
-            excerpts.append("{0}{1}: {2}".format(source, location, normalized))
-            if len(excerpts) == 3:
-                break
+        mode = normalize_response_mode(response_mode)
+        limits = {
+            "concise": (2, 320),
+            "detailed": (5, 480),
+            "checklist": (4, 300),
+            "evidence": (4, 480),
+        }
+        limit, max_chars = limits[mode]
+        excerpts = ModelGateway._grounded_excerpts(
+            question, evidence, limit=limit, max_chars=max_chars
+        )
         if not excerpts:
             return (
                 "Encontrei documentos relacionados, mas nenhum trecho adequado "
@@ -454,12 +529,65 @@ class ModelGateway:
                 else "I found related internal documents, but no extract suitable "
                 "for a grounded answer."
             )
-        introduction = (
-            "Com base na documentação interna indexada:"
-            if portuguese
-            else "Based on the indexed internal documentation:"
-        )
-        return introduction + "\n\n" + "\n".join("- " + excerpt for excerpt in excerpts)
+
+        introductions = {
+            "concise": (
+                "Com base na documentação interna indexada:"
+                if portuguese
+                else "Based on the indexed internal documentation:"
+            ),
+            "detailed": (
+                "A documentação interna sustenta os seguintes pontos:"
+                if portuguese
+                else "The internal documentation supports these points:"
+            ),
+            "checklist": (
+                "Checklist fundamentado na documentação interna:"
+                if portuguese
+                else "Checklist grounded in the internal documentation:"
+            ),
+            "evidence": (
+                "Trechos de evidência da documentação interna:"
+                if portuguese
+                else "Evidence excerpts from the internal documentation:"
+            ),
+        }
+        return introductions[mode] + "\n\n" + "\n".join("- " + item for item in excerpts)
+
+    @staticmethod
+    def _grounded_excerpts(
+        question: str,
+        evidence: Sequence[RetrievedChunk],
+        *,
+        limit: int,
+        max_chars: int,
+    ) -> List[str]:
+        query_terms = set(tokenize(question))
+        excerpts: List[str] = []
+        seen = set()
+        for item in evidence:
+            compact_content = ModelGateway._compact_evidence(question, item.content)
+            excerpt = ModelGateway._best_sentence(compact_content, query_terms)
+            normalized = ModelGateway._plain_excerpt(excerpt, max_chars=max_chars)
+            if not normalized or normalized.lower() in seen:
+                continue
+            seen.add(normalized.lower())
+            source = str(item.metadata.get("source", "internal document"))
+            location = ModelGateway._location(item)
+            excerpts.append("{0}{1}: {2}".format(source, location, normalized))
+            if len(excerpts) >= max(1, int(limit)):
+                break
+        return excerpts
+
+    @staticmethod
+    def _plain_excerpt(value: str, *, max_chars: int) -> str:
+        text = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", value)
+        text = re.sub(r"[*_`]+", "", text)
+        # Some image-based or font-mapped PDFs yield only Unicode replacement
+        # characters. They are not usable evidence and must not reach the UI.
+        text = text.replace("\ufffd", " ")
+        text = re.sub(r"\s+", " ", text).strip()
+        return textwrap.shorten(text, width=max(80, int(max_chars)), placeholder="…")
 
     @staticmethod
     def _is_portuguese(question: str) -> bool:

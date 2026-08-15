@@ -11,8 +11,8 @@ env/
 .venv/
 
 # Environment Variables & Secrets
-.env
-.env.local
+.env*
+!.env.example
 
 # Node modules & logs
 node_modules/

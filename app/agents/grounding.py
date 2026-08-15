@@ -27,7 +27,7 @@ def grade_evidence(
     *,
     allow_semantic_only: bool = False,
 ) -> EvidenceGrade:
-    usable = [document for document in documents if document.content.strip()]
+    usable = [document for document in documents if is_usable_evidence(document.content)]
     if not usable:
         return EvidenceGrade(False, 0.0, 0.0)
     terms = meaningful_terms(question)
@@ -50,8 +50,10 @@ def deduplicate_evidence(
     identifiers = set()
     content_values = set()
     for document in documents:
+        if not is_usable_evidence(document.content):
+            continue
         content_key = re.sub(r"\s+", " ", document.content).strip().casefold()
-        if not document.id or not content_key:
+        if not document.id:
             continue
         if document.id in identifiers or content_key in content_values:
             continue
@@ -61,6 +63,18 @@ def deduplicate_evidence(
         if len(selected) >= max(1, int(limit)):
             break
     return selected
+
+
+def is_usable_evidence(content: str) -> bool:
+    """Reject empty, non-textual, and visibly corrupt extracted content."""
+
+    value = str(content or "").strip()
+    if not value:
+        return False
+    replacement_count = value.count("\ufffd")
+    if replacement_count >= max(8, len(value) // 5):
+        return False
+    return sum(character.isalnum() for character in value) >= 3
 
 
 def rewrite_query(question: str, attempt: int, domain: str) -> str:
@@ -77,12 +91,16 @@ def rewrite_query(question: str, attempt: int, domain: str) -> str:
         "juridico": ("politica requisito", "conformidade obrigacao"),
         "api_spec": ("especificacao endpoint", "contrato requisicao resposta"),
         "engenharia": ("procedimento operacional", "runbook diretriz"),
+        "estrategico": ("planejamento meta", "okr prioridade roadmap"),
+        "comunicacao": ("comunicado interno", "newsletter evento anuncio"),
     }
     hints_en = {
         "rh": ("policy benefit", "procedure eligibility"),
         "juridico": ("policy requirement", "compliance obligation"),
         "api_spec": ("specification endpoint", "request response contract"),
         "engenharia": ("operating procedure", "runbook guideline"),
+        "estrategico": ("strategic plan goal", "okr priority roadmap"),
+        "comunicacao": ("internal announcement", "newsletter event communication"),
     }
     hints = hints_pt if portuguese else hints_en
     choices = hints.get(
