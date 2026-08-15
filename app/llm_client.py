@@ -54,6 +54,10 @@ class ModelProviderEmptyResponse(ModelProviderResponseError):
     """The provider used its completion budget without producing an answer."""
 
 
+class ModelProviderLanguageMismatch(ModelProviderResponseError):
+    """The provider ignored the language required by the user question."""
+
+
 @dataclass(frozen=True)
 class SynthesisResult:
     answer: str
@@ -129,15 +133,15 @@ class ModelGateway:
                 answer = self._remote_synthesize(
                     route, question, evidence, response_mode=requested_mode
                 )
-            except ModelProviderEmptyResponse as exc:
+            except (ModelProviderEmptyResponse, ModelProviderLanguageMismatch) as exc:
                 # A reasoning model can legally return HTTP 200 with no final
-                # content when its reasoning budget is exhausted.  Treat that
-                # shape as a transient route failure so grounded local
-                # synthesis remains available instead of returning a 503.
+                # content or ignore the requested answer language. Treat both
+                # shapes as unusable route results so the next explicit route
+                # can preserve the public response contract.
                 transient_failure = True
                 self._record_transient_failure(route.name)
                 logger.warning(
-                    "Model route %s returned no final content (%s)",
+                    "Model route %s returned unusable final content (%s)",
                     route.name,
                     type(exc).__name__,
                 )
@@ -247,6 +251,9 @@ class ModelGateway:
             context_size += len(part)
         context = "\n\n".join(context_parts)
         client = self._get_client(route)
+        portuguese, language_instruction, question_label, evidence_label = (
+            self._language_contract(question)
+        )
         request: dict[str, Any] = {
             "model": route.model,
             "messages": [
@@ -254,15 +261,24 @@ class ModelGateway:
                     "role": "system",
                     "content": (
                         "Use only the supplied internal evidence. "
-                        "Answer in the user's language. "
+                        + language_instruction
+                        + " "
                         "If it is insufficient, say so. Do not invent citations or unsupported details."
                         " "
-                        + response_guidance(normalize_response_mode(response_mode))
+                        + response_guidance(
+                            normalize_response_mode(response_mode),
+                            portuguese=portuguese,
+                        )
                     ),
                 },
                 {
                     "role": "user",
-                    "content": "Question: {0}\n\nEvidence:\n{1}".format(question, context),
+                    "content": "{0}: {1}\n\n{2}:\n{3}".format(
+                        question_label,
+                        question,
+                        evidence_label,
+                        context,
+                    ),
                 },
             ],
             "temperature": 0,
@@ -272,6 +288,24 @@ class ModelGateway:
         if extra_body:
             request["extra_body"] = extra_body
         response = client.chat.completions.create(**request)
+        return self._validated_response_content(response, portuguese=portuguese)
+
+    @staticmethod
+    def _language_contract(question: str) -> tuple[bool, str, str, str]:
+        portuguese = ModelGateway._is_portuguese(question)
+        if portuguese:
+            return (
+                True,
+                "Responda exclusivamente em português do Brasil, mesmo que as evidências "
+                "estejam em outro idioma. Traduza e sintetize os fatos relevantes; preserve "
+                "nomes próprios, siglas, códigos e valores. Não devolva parágrafos em inglês.",
+                "Pergunta",
+                "Evidências",
+            )
+        return False, "Answer exclusively in English.", "Question", "Evidence"
+
+    @staticmethod
+    def _validated_response_content(response: Any, *, portuguese: bool) -> str:
         try:
             message = response.choices[0].message
             content = message.content
@@ -281,7 +315,12 @@ class ModelGateway:
             ) from exc
         if not isinstance(content, str) or not content.strip():
             raise ModelProviderEmptyResponse("The model provider returned an empty response")
-        return content.strip()
+        answer = content.strip()
+        if portuguese and not ModelGateway._has_portuguese_language_signal(answer):
+            raise ModelProviderLanguageMismatch(
+                "The model provider returned an answer in the wrong language"
+            )
+        return answer
 
     @staticmethod
     def _max_tokens(route: ModelRouteConfig, evidence_count: int = 1) -> int:
@@ -519,12 +558,17 @@ class ModelGateway:
         }
         limit, max_chars = limits[mode]
         excerpts = ModelGateway._grounded_excerpts(
-            question, evidence, limit=limit, max_chars=max_chars
+            question,
+            evidence,
+            limit=limit,
+            max_chars=max_chars,
+            portuguese=portuguese,
         )
         if not excerpts:
             return (
-                "Encontrei documentos relacionados, mas nenhum trecho adequado "
-                "para uma resposta fundamentada."
+                "Encontrei evidências internas relevantes, mas não consegui produzir "
+                "uma resposta fundamentada em português neste momento. Consulte as "
+                "fontes verificadas ou tente novamente."
                 if portuguese
                 else "I found related internal documents, but no extract suitable "
                 "for a grounded answer."
@@ -561,6 +605,7 @@ class ModelGateway:
         *,
         limit: int,
         max_chars: int,
+        portuguese: bool = False,
     ) -> List[str]:
         query_terms = set(tokenize(question))
         excerpts: List[str] = []
@@ -570,6 +615,8 @@ class ModelGateway:
             excerpt = ModelGateway._best_sentence(compact_content, query_terms)
             normalized = ModelGateway._plain_excerpt(excerpt, max_chars=max_chars)
             if not normalized or normalized.lower() in seen:
+                continue
+            if portuguese and not ModelGateway._has_portuguese_language_signal(normalized):
                 continue
             seen.add(normalized.lower())
             source = str(item.metadata.get("source", "internal document"))
@@ -596,8 +643,59 @@ class ModelGateway:
             return True
         words = set(re.findall(r"[a-z]+", value))
         return bool(
-            words & {"como", "qual", "quais", "devo", "segundo", "política", "incidente"}
+            words
+            & {
+                "como",
+                "qual",
+                "quais",
+                "devo",
+                "segundo",
+                "politica",
+                "incidente",
+                "fazer",
+                "proceder",
+                "posso",
+                "quando",
+                "onde",
+                "porque",
+            }
         )
+
+    @staticmethod
+    def _has_portuguese_language_signal(value: str) -> bool:
+        words = re.findall(r"[a-záàâãéêíóôõúç]+", value.casefold())
+        if not words:
+            return False
+        portuguese_markers = {
+            "as",
+            "com",
+            "da",
+            "das",
+            "de",
+            "deve",
+            "devem",
+            "do",
+            "dos",
+            "e",
+            "em",
+            "entre",
+            "esta",
+            "este",
+            "não",
+            "o",
+            "os",
+            "ou",
+            "para",
+            "pela",
+            "pelo",
+            "que",
+            "ser",
+            "uma",
+            "um",
+        }
+        if re.search(r"[áàâãéêíóôõúç]", value.casefold()):
+            return True
+        return sum(word in portuguese_markers for word in words) >= 2
 
     @staticmethod
     def _best_sentence(content: str, query_terms: set) -> str:

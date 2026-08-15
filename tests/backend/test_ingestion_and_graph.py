@@ -132,7 +132,8 @@ def test_local_answers_follow_the_question_language(axiom_settings, sample_docum
     unsupported = service.query("Qual é o protocolo zyxwplugh?", domain="engenharia")
     external = service.query("Pesquise na web a versão mais recente", domain="web")
 
-    assert grounded["answer"].startswith("Com base na documentação interna")
+    assert "resposta fundamentada em português" in grounded["answer"]
+    assert "monthly home office benefit" not in grounded["answer"].lower()
     assert unsupported["answer"].startswith("Não consigo fundamentar")
     assert "desativada" in external["answer"].lower()
 

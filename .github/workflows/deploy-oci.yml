@@ -74,11 +74,13 @@ jobs:
       - name: Configure production AI providers
         env:
           RUNTIME_NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
+          RUNTIME_MINIMAX_API_KEY: ${{ secrets.MINIMAX_API_KEY || secrets.NVIDIA_API_KEY }}
           RUNTIME_EMBEDDING_API_KEY: ${{ secrets.AXIOM_EMBEDDING_API_KEY }}
         shell: bash
         run: |
           set -euo pipefail
           test -n "$RUNTIME_NVIDIA_API_KEY"
+          test -n "$RUNTIME_MINIMAX_API_KEY"
           test -n "$RUNTIME_EMBEDDING_API_KEY"
 
           local_settings="$RUNNER_TEMP/axiom-ai.env"
@@ -87,12 +89,15 @@ jobs:
           umask 077
           {
             printf 'NVIDIA_API_KEY=%s\n' "$RUNTIME_NVIDIA_API_KEY"
+            printf 'MINIMAX_API_KEY=%s\n' "$RUNTIME_MINIMAX_API_KEY"
             printf 'AXIOM_EMBEDDING_API_KEY=%s\n' "$RUNTIME_EMBEDDING_API_KEY"
             printf '%s\n' \
-              'AXIOM_NVIDIA_ENABLED=true' \
-              'AXIOM_LLM_PROVIDER=nvidia' \
-              'AXIOM_LLM_FALLBACK=deterministic' \
+              'AXIOM_NVIDIA_ENABLED=false' \
+              'AXIOM_LLM_PROVIDER=' \
+              'AXIOM_LLM_FALLBACK=' \
+              'AXIOM_LLM_ROUTES=nvidia-minimax,deterministic' \
               'NVIDIA_MODEL=meta/muse-glimmer-30b' \
+              'NVIDIA_MINIMAX_MODEL=minimaxai/minimax-m3' \
               'AXIOM_EMBEDDING_PROVIDER=openai' \
               'AXIOM_EMBEDDING_MODEL=nvidia/llama-nemotron-embed-1b-v2' \
               'AXIOM_EMBEDDING_DIMENSIONS=384' \
@@ -122,11 +127,14 @@ jobs:
 
           allowed = {
               "NVIDIA_API_KEY",
+              "MINIMAX_API_KEY",
               "AXIOM_EMBEDDING_API_KEY",
               "AXIOM_NVIDIA_ENABLED",
               "AXIOM_LLM_PROVIDER",
               "AXIOM_LLM_FALLBACK",
+              "AXIOM_LLM_ROUTES",
               "NVIDIA_MODEL",
+              "NVIDIA_MINIMAX_MODEL",
               "AXIOM_EMBEDDING_PROVIDER",
               "AXIOM_EMBEDDING_MODEL",
               "AXIOM_EMBEDDING_DIMENSIONS",
@@ -141,7 +149,9 @@ jobs:
                   for line in payload.read_text().splitlines()
                   if line
               )
-              if set(updates) != allowed or not all(updates.values()):
+              empty_allowed = {"AXIOM_LLM_PROVIDER", "AXIOM_LLM_FALLBACK"}
+              required = allowed - empty_allowed
+              if set(updates) != allowed or not all(updates[key] for key in required):
                   raise SystemExit("Invalid runtime AI settings")
               existing = target.read_text().splitlines() if target.exists() else []
               output, written = [], set()

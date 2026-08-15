@@ -122,6 +122,89 @@ def test_empty_remote_response_uses_grounded_deterministic_fallback(
     assert "runbook.md" in result.answer
 
 
+def test_portuguese_remote_prompt_requires_translation_of_english_evidence(
+    axiom_settings, evidence
+) -> None:
+    configured = replace(
+        axiom_settings,
+        llm_routes=("nvidia-minimax", "deterministic"),
+        minimax_api_key="minimax-secret",
+    )
+    calls = []
+
+    def factory(route, timeout, max_retries):
+        class Completion:
+            def create(self, **kwargs):
+                calls.append(kwargs)
+                return SimpleNamespace(
+                    choices=[
+                        SimpleNamespace(
+                            message=SimpleNamespace(
+                                content="O objetivo interno de recuperação é de quatro horas."
+                            )
+                        )
+                    ]
+                )
+
+        return SimpleNamespace(chat=SimpleNamespace(completions=Completion()))
+
+    result = ModelGateway(configured, client_factory=factory).synthesize(
+        "Qual é o objetivo interno de recuperação?", evidence
+    )
+
+    assert result.mode == "nvidia-minimax"
+    assert result.answer.startswith("O objetivo interno")
+    assert "exclusivamente em português do Brasil" in calls[0]["messages"][0]["content"]
+    assert "Pergunta:" in calls[0]["messages"][1]["content"]
+    assert "Evidências:" in calls[0]["messages"][1]["content"]
+
+
+def test_english_remote_answer_to_portuguese_question_never_leaks_to_response(
+    axiom_settings, evidence
+) -> None:
+    configured = replace(
+        axiom_settings,
+        llm_routes=("nvidia-minimax", "deterministic"),
+        minimax_api_key="minimax-secret",
+    )
+    gateway = ModelGateway(
+        configured,
+        client_factory=lambda route, timeout, retries: FakeClient(
+            "The internal recovery objective is four hours and the team must follow the runbook."
+        ),
+    )
+
+    result = gateway.synthesize("Qual é o objetivo interno de recuperação?", evidence)
+
+    assert result.mode == "deterministic"
+    assert "resposta fundamentada em português" in result.answer
+    assert "The internal recovery objective" not in result.answer
+
+
+def test_portuguese_deterministic_fallback_does_not_echo_english_evidence(evidence) -> None:
+    answer = ModelGateway._deterministic_synthesis(
+        "Como proceder durante o incidente?", evidence
+    )
+
+    assert "resposta fundamentada em português" in answer
+    assert "internal recovery objective" not in answer
+
+    title_only = [
+        RetrievedChunk(
+            id="heading",
+            content="Axiom Tech - Back-end Engineering Guidelines",
+            metadata={"source": "backend_guidelines.md"},
+            score=0.9,
+        )
+    ]
+    title_answer = ModelGateway._deterministic_synthesis(
+        "Como proceder durante o incidente?", title_only
+    )
+
+    assert "resposta fundamentada em português" in title_answer
+    assert "Back-end Engineering Guidelines" not in title_answer
+
+
 def test_non_transient_provider_failure_does_not_fall_back(axiom_settings, evidence) -> None:
     configured = replace(
         axiom_settings,

@@ -4,6 +4,20 @@ O Axiom Tech é um agente inteligente que responde perguntas sobre documentos co
 
 O agente lê e processa documentos PDF, CSV, Excel, Word, PowerPoint, Markdown, JSON e HTML. A ingestão preserva domínio, tipo de arquivo, caminho relativo e metadados de página, slide ou planilha para que as respostas apresentem citações verificáveis.
 
+## Aplicação online
+
+- [Abrir o Axiom Tech via HTTPS](https://hbdmwrkfrff2rrhsh4myxy2cyu.apigateway.sa-saopaulo-1.oci.customer-oci.com/)
+- [Verificar o health da API](https://hbdmwrkfrff2rrhsh4myxy2cyu.apigateway.sa-saopaulo-1.oci.customer-oci.com/api/v1/health)
+- [Acesso direto à VM](http://163.176.43.116:8080/)
+
+### Visão geral
+
+![Tela inicial do Axiom Tech com a base corporativa disponível](docs/evidence/axiom-overview.png)
+
+### Resposta fundamentada em português
+
+![Consulta SEV-1 respondida em português com fontes verificadas](docs/evidence/axiom-grounded-answer.png)
+
 ## Entrega do desafio
 
 | Requisito | Evidência no projeto | Estado |
@@ -12,12 +26,12 @@ O agente lê e processa documentos PDF, CSV, Excel, Word, PowerPoint, Markdown, 
 | Descrição, arquitetura e tecnologias | Este README e [docs/architecture.md](docs/architecture.md) | Concluído |
 | Agente funcional baseado em documentos | LangGraph, ingestão multiformato, ChromaDB e interface React | Concluído |
 | Código para ler e processar documentos | [app/ingestion/loader.py](app/ingestion/loader.py) | Concluído |
-| Deploy em serviço OCI | OCI Compute, API Gateway, Docker Compose, OCI Vault e Block Volume | Gateway criado; regra TCP/443 pendente |
-| Link público sem depender do IP | Hostname HTTPS gerado pelo Oracle API Gateway | Em validação de rede |
-| Captura da aplicação online | docs/evidence e link desta seção | Pendente captura final |
-| Deploy automático por commit | [workflow de deploy OCI](.github/workflows/deploy-oci.yml) | Preparado para teste |
+| Deploy em serviço OCI | OCI Compute, API Gateway, Docker Compose e armazenamento persistente | Concluído |
+| Link público sem depender do IP | Hostname HTTPS gerado pelo Oracle API Gateway | Concluído |
+| Captura da aplicação online | [docs/evidence](docs/evidence) e previews desta página | Concluído |
+| Deploy automático por commit | [workflow de deploy OCI](.github/workflows/deploy-oci.yml) | Configurado |
 
-Endpoint Oracle criado para a demonstração: https://hbdmwrkfrff2rrhsh4myxy2cyu.apigateway.sa-saopaulo-1.oci.customer-oci.com. A variável PUBLIC_URL do ambiente production do GitHub deve usar esse endereço ou um domínio customizado configurado sobre o API Gateway.
+Endpoint Oracle validado para a demonstração: [abrir aplicação](https://hbdmwrkfrff2rrhsh4myxy2cyu.apigateway.sa-saopaulo-1.oci.customer-oci.com/). A variável `PUBLIC_URL` do ambiente `production` do GitHub usa esse endereço ou um domínio customizado configurado sobre o API Gateway.
 
 ## Visão geral da arquitetura
 
@@ -288,14 +302,16 @@ As respostas reais podem variar na redação, mas devem manter as evidências ap
 
 ## Observabilidade, embeddings e chaves de IA
 
-O modo local não exige segredos. Uma rota remota é sempre explícita; por
-exemplo, NVIDIA com fallback local apenas para falhas transitórias:
+O modo local não exige segredos. Uma rota remota é sempre explícita; em
+produção, a rota NVIDIA MiniMax mantém a síntese dentro do orçamento do API
+Gateway e usa fallback local seguro para falhas transitórias:
 
 ```dotenv
-AXIOM_LLM_PROVIDER=nvidia
-AXIOM_LLM_FALLBACK=deterministic
-NVIDIA_API_KEY=<provider-key>
-NVIDIA_MODEL=meta/muse-glimmer-30b
+AXIOM_LLM_PROVIDER=
+AXIOM_LLM_FALLBACK=
+AXIOM_LLM_ROUTES=nvidia-minimax,deterministic
+MINIMAX_API_KEY=<provider-key>
+NVIDIA_MINIMAX_MODEL=minimaxai/minimax-m3
 ```
 
 OpenAI usa `AXIOM_LLM_PROVIDER=openai`, `OPENAI_API_KEY` e `OPENAI_MODEL`.
@@ -368,7 +384,7 @@ O API Gateway fornece um hostname HTTPS Oracle sem exigir que o usuário registr
 
 O Gateway é o ponto público; a VM não precisa expor as portas 80/443. Depois de validar o Gateway, a regra pública TCP/8080 da VM deve ser removida ou restringida ao CIDR do Gateway.
 
-O endpoint Oracle já foi criado, mas a validação externa depende da regra TCP/443 na Security List. O Caddy continua disponível como alternativa quando o projeto possuir um domínio próprio.
+O endpoint Oracle está ativo e validado externamente. O Caddy continua disponível como alternativa quando o projeto possuir um domínio próprio.
 
 ## Deploy automático por commit
 
@@ -394,6 +410,9 @@ Secrets do ambiente:
 ```text
 OCI_SSH_PRIVATE_KEY
 OCI_KNOWN_HOSTS
+NVIDIA_API_KEY
+MINIMAX_API_KEY (opcional; o workflow aceita NVIDIA_API_KEY como fallback)
+AXIOM_EMBEDDING_API_KEY
 ```
 
 Variables do ambiente:
@@ -401,7 +420,7 @@ Variables do ambiente:
 ```text
 OCI_DEPLOY_HOST
 OCI_DEPLOY_USER=ubuntu
-OCI_DEPLOY_PATH=/opt/axiom
+OCI_DEPLOY_PATH=/opt/axiom-tech
 PUBLIC_URL=https://hbdmwrkfrff2rrhsh4myxy2cyu.apigateway.sa-saopaulo-1.oci.customer-oci.com
 ```
 
@@ -431,16 +450,12 @@ PUBLIC_URL
 
 ## Evidência do deploy
 
-Antes de enviar o desafio, crie uma captura sem informações sensíveis contendo:
-
-- o endereço HTTPS público;
-- a interface do Axiom Tech carregada;
-- uma pergunta conhecida;
-- a resposta;
-- pelo menos uma citação visível;
-- o status online da aplicação.
-
-Salve a captura sanitizada em docs/evidence/axiom-live.png ou um vídeo curto em docs/evidence/axiom-live.mp4 e adicione o link nesta seção. Não mostre chaves, terminal SSH, IP privado, conteúdo confidencial do corpus ou payload bruto do LangSmith.
+As capturas sanitizadas usadas como preview estão em
+[docs/evidence/axiom-overview.png](docs/evidence/axiom-overview.png) e
+[docs/evidence/axiom-grounded-answer.png](docs/evidence/axiom-grounded-answer.png).
+Elas mostram a interface online, o status da base, uma pergunta conhecida, a
+resposta em português e as fontes verificadas, sem chaves, terminal SSH, IP
+privado ou payload bruto de observabilidade.
 
 ## Validação
 

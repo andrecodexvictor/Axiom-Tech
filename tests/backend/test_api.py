@@ -205,7 +205,7 @@ def test_query_response_modes_and_new_corpus_domains_are_explicit(
     strategic = axiom_settings.documents_dir / "estrategico"
     strategic.mkdir()
     (strategic / "okr.md").write_text(
-        "# OKR 2026\nThe reliability goal is 99.95 percent availability.\n",
+        "# OKR 2026\nA meta de confiabilidade é 99,95 por cento de disponibilidade.\n",
         encoding="utf-8",
     )
     service = create_knowledge_service(axiom_settings)
